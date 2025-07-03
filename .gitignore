@@ -1,0 +1,5 @@
+.venv/
+.python-version
+data/
+.vscode/
+plans/
