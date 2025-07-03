@@ -18,6 +18,7 @@ CATEGORY_KEYWORDS = {
     'Rules': ['rules'],
     'Registration': ['registration'],
 }
+
 def get_category(filename):
     fname = filename.lower()
     for category, keywords in CATEGORY_KEYWORDS.items():
@@ -29,14 +30,14 @@ def get_category(filename):
 CHROMA_DIR = os.path.join(os.path.dirname(__file__), 'chroma_db')
 os.makedirs(CHROMA_DIR, exist_ok=True)
 
-# Initialize embedding model (using a small, local model for demo; swap for OpenAI if needed)
-embeddings = HuggingFaceEmbeddings(
+# Initialize embedding model (using the same model for embedding and retrieval)
+embedding_model = HuggingFaceEmbeddings(
     model_name="sentence-transformers/all-MiniLM-L6-v2",
     model_kwargs={"device": "cuda"}
 )
 
 # Initialize Chroma vector store
-vectorstore = Chroma(persist_directory=CHROMA_DIR, embedding_function=embeddings)
+vectorstore = Chroma(persist_directory=CHROMA_DIR, embedding_function=embedding_model)
 
 def ingest_pdf(filepath):
     loader = PyPDFLoader(filepath)
