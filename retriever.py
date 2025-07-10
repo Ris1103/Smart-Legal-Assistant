@@ -1,90 +1,91 @@
-from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
-from transformers.pipelines import pipeline
-from langchain.vectorstores import Chroma
-from langchain.embeddings import HuggingFaceEmbeddings
-import torch
+import os
+from huggingface_hub import InferenceClient
+from langchain_community.vectorstores import Chroma  # Corrected import
+from langchain_huggingface import HuggingFaceEmbeddings  # Corrected import
+from langchain_community.llms import HuggingFacePipeline
+from langchain.chains import RetrievalQA
 
-# Use a publicly available LLAMA model or Mistral model
-llama_model_name = "meta-llama/Llama-2-7b-hf"  # Public Llama-2 model (instead of gated meta-llama)
-embedding_model = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2", model_kwargs={"device": "cuda"})
+# 1) Set up Hugging Face API client
+client = InferenceClient(
+    token="Your_token_here",  # Replace with your actual Hugging Face token
+)
 
-# Initialize Chroma vector store
-CHROMA_DIR = './chroma_db'
-vectorstore = Chroma(persist_directory=CHROMA_DIR, embedding_function=embedding_model)
+# 2) Embedding — using the correct embedding model
+embedding_model = HuggingFaceEmbeddings(
+    model_name="hkunlp/instructor-large",
+    model_kwargs={"device": "cuda"},  # Or "cpu" if you lack a GPU
+)
 
-# Load the model for summarization (LLAMA-2 or Mistral)
-summarizer = AutoModelForSeq2SeqLM.from_pretrained(llama_model_name)
-tokenizer = AutoTokenizer.from_pretrained(llama_model_name)
+# 3) Vector store for storing and retrieving documents
+CHROMA_DIR = os.path.join(os.path.dirname(__file__), "chroma_db")
+vectorstore = Chroma(
+    persist_directory=CHROMA_DIR,
+    embedding_function=embedding_model.embed_query,  # Correct method to use
+)
 
-# System prompt to guide summarization
-system_prompt = """
-You are a legal assistant for small businesses in India. Based on the retrieved legal documents from the [CATEGORY] category, summarize the key points that answer the user's query. The response should be concise, clear, and easy to understand for a non-expert. Focus on providing actionable insights and breaking down complex legal terms into simple language. The user query is as follows:
 
-USER QUERY: [USER_QUERY]
-SUMMARIZE the relevant details from the retrieved documents in the following manner:
-1. Key points about the law or regulation.
-2. Specific legal advice relevant to small businesses.
-3. Any important compliance steps or recommendations.
-"""
+# 4) Function to interact with Hugging Face API for generating structured summaries
+def generate_structured_summary(text):
+    prompt = f"""
+    Please summarize the following content in a structured format with the following sections:
+    1. **Key Points**: Provide a list of the main points from the content.
+    2. **Conclusion**: Provide the conclusion based on the content.
+    3. **Important Notes**: Any notable or important details to remember.
 
-# Function to categorize the query
-def categorize_query(user_query):
-    CATEGORY_KEYWORDS = {
-        'GST': ['gst', 'cgst', 'igst'],
-        'Income Tax': ['income-tax', 'income tax', 'tax'],
-        'Penal Code': ['ipc', 'penal code'],
-        'Company Act': ['ca act', 'companies act', 'moa'],
-        'Shop Act': ['shop act'],
-        'Rules': ['rules'],
-        'Registration': ['registration'],
-    }
-    
-    for category, keywords in CATEGORY_KEYWORDS.items():
-        if any(kw in user_query.lower() for kw in keywords):
-            return category
-    return 'Other'
+    Content: {text}
+    """
 
-# Retrieve documents based on query
-def retrieve_documents(user_query):
-    # Categorize the query
-    category = categorize_query(user_query)
-    
-    # Retrieve relevant documents based on the category
-    docs = vectorstore.similarity_search(user_query, category=category)
-    
-    return docs
+    try:
+        # Use text generation API (Hugging Face Inference API)
+        response = client.text_generation(
+            model="google/flan-ul2",  # Choose the appropriate model
+            prompt=prompt,
+            max_new_tokens=150,  # Adjust token limit as needed
+        )
+        return response["generated_text"]
+    except Exception as e:
+        print(f"Error accessing the model: {e}")
+        return None
 
-# Function to summarize the documents with system prompt
-def summarize_documents(documents, user_query):
-    # Extract text from documents
-    doc_texts = [doc.page_content for doc in documents]
-    
-    # Combine text into a single string for summarization
-    doc_content = " ".join(doc_texts)
-    
-    # Format the system prompt with user query and retrieved documents
-    prompt = system_prompt.replace("[CATEGORY]", documents[0].metadata['category']).replace("[USER_QUERY]", user_query)
-    
-    # Tokenize and summarize the content using LLAMA model with system prompt
-    inputs = tokenizer(prompt + "\n\n" + doc_content, return_tensors="pt", truncation=True, padding=True, max_length=1024)
-    summary_ids = summarizer.generate(inputs["input_ids"], max_length=300, min_length=100, length_penalty=2.0)
-    
-    # Decode the summary
-    summary = tokenizer.decode(summary_ids[0], skip_special_tokens=True)
-    
-    return summary
 
-# Process the user query
-def process_query(user_query):
-    # Retrieve documents based on the query
-    documents = retrieve_documents(user_query)
-    
-    # Summarize the retrieved documents with the system prompt
-    summary = summarize_documents(documents, user_query)
-    
-    return summary
+# 5) Set up HuggingFacePipeline for the summarization task
+summarization_pipeline = HuggingFacePipeline(pipeline=client.text_generation)
 
-# Example usage
-user_query = "What are the GST compliance requirements for small businesses?"
-answer = process_query(user_query)
-print(answer)
+# 6) Build a RetrievalQA chain for hybrid search and summarization
+qa_chain = RetrievalQA.from_chain_type(
+    llm=summarization_pipeline,  # Pass HuggingFacePipeline as the LLM (Runnable)
+    chain_type="stuff",  # or "map_reduce" for very large docs
+    retriever=vectorstore.as_retriever(),
+)
+
+
+def process_query(user_query: str) -> str:
+    """
+    1. Run RetrievalQA to get the relevant documents.
+    2. Generate a structured summary from the retrieved documents.
+    3. Save the summary to summary.txt.
+    4. Return the structured summary.
+    """
+    # Step 1: Retrieve documents using the RAG chain
+    retrieved_docs = qa_chain.run(user_query)
+
+    # Step 2: Generate a structured summary of the retrieved documents
+    structured_summary = generate_structured_summary(retrieved_docs)
+
+    if structured_summary:
+        # Step 3: Save the structured summary to a file
+        out_path = os.path.join(os.path.dirname(__file__), "summary.txt")
+        with open(out_path, "w", encoding="utf-8") as f:
+            f.write(structured_summary)
+
+        print(f"Summary written to {out_path}")
+        return structured_summary
+    else:
+        return "Error: Unable to generate a summary."
+
+
+if __name__ == "__main__":
+    # Example query
+    query = "What are the GST compliance requirements for small businesses?"
+    answer = process_query(query)
+    print("=== STRUCTURED SUMMARY ===\n", answer)
