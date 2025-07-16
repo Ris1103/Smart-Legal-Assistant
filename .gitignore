@@ -5,4 +5,5 @@ data/
 plans/
 chroma_db/
 .env
-smaple_results/
+sample_results/
+__pycache__/
