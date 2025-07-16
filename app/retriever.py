@@ -241,28 +241,3 @@ class HybridRAGPipeline:
             logger.info(f"Results saved to {filename}")
         except Exception as e:
             logger.error(f"Error saving results: {e}")
-
-
-def main():
-    """Example usage of the Google RAG pipeline."""
-    rag = HybridRAGPipeline()
-
-    queries = [
-        "What are the GST compliance requirements for small businesses?",
-        "How to register a company under Companies Act?",
-        "Penalties under Income Tax Act for non-compliance",
-    ]
-
-    for query in queries:
-        print(f"\n{'=' * 20}\nProcessing query: {query}\n{'=' * 20}")
-        results = rag.process_query(query, k=5, search_type="hybrid")
-
-        sanitized_query = "".join(c for c in query if c.isalnum() or c in " _-").rstrip()
-        filename = f"rag_results_{sanitized_query[:30]}.txt"
-        rag.save_results(results, filename)
-
-        print(f"Summary: {results['summary'][:200]}...")
-
-
-if __name__ == "__main__":
-    main()
