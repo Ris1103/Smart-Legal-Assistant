@@ -4,3 +4,5 @@ data/
 .vscode/
 plans/
 chroma_db/
+.env
+smaple_results/
