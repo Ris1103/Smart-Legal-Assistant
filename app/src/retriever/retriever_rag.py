@@ -80,6 +80,18 @@ class HybridRAGPipeline:
             logger.error(f"Error preparing TF-IDF corpus: {e}")
             self.documents, self.metadatas, self.tfidf_matrix = [], [], None
 
+    def semantic_search_with_scores(self, query: str, k: int = 5) -> list[tuple[Document, float]]:
+        """
+        Perform semantic search and return documents with their relevance scores.
+        """
+        try:
+            results = self.vectorstore.similarity_search_with_relevance_scores(query, k=k)
+            logger.info(f"Semantic search with scores returned {len(results)} results.")
+            return results
+        except Exception as e:
+            logger.error(f"Error in semantic search with scores: {e}")
+            return []
+
     def semantic_search(self, query: str, k: int = 5) -> List[Document]:
         """Perform semantic search using ChromaDB."""
         try:

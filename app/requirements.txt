@@ -7,6 +7,8 @@ langchain-core>=0.2.1
 langchain-google-genai>=1.0.6
 langchain-chroma>=0.1.2
 chromadb>=0.5.3
+PerplexiPy==1.3.1
+perplexity-client>=0.0.12
 pypdf>=4.2.0
 python-dotenv>=1.0.1
 redis>=5.0.7
