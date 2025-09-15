@@ -16,20 +16,20 @@ To achieve this, the final architecture will implement technologies such as **Ch
 
 ## 2. Current Status (What has been implemented so far)
 
-A foundational version of the RAG pipeline has been successfully built and deployed as a web API. The current implementation includes:
+The project has evolved from a basic RAG pipeline into an intelligent, agent-driven system with access to real-time web information. The current implementation includes:
 
-- **Core RAG Pipeline:** A robust RAG system that can retrieve relevant information from a knowledge base and generate summarized answers.
-- **Vector Database:** **ChromaDB** is used as the vector store to save, manage, and query document embeddings efficiently.
-- **Hybrid Search:** The system employs a hybrid search mechanism that combines:
-  - **Semantic Search:** Using vector similarity to find contextually relevant documents.
-  - **Keyword Search:** Using traditional TF-IDF to match specific terms and phrases.
-- **State-of-the-Art AI Models:**
-  - **Embedding Model:** Google's `text-embedding-004` is used to create high-quality vector embeddings for all legal documents.
-  - **Generative Model:** Google's `gemma-3-27b-it` is used to generate coherent, accurate summaries and answers from the retrieved context.
-- **FastAPI Backend:** The entire pipeline is served through a high-performance API built with FastAPI, featuring two primary endpoints:
-  - `/ingest`: A dynamic endpoint to upload new PDF documents, which are then processed and added to the knowledge base in real-time.
-  - `/retrieve`: An endpoint to ask questions and receive context-aware, summarized answers from the AI.
-- **Modular & Scalable Codebase:** The project is structured into logical, reusable modules (`main.py`, `retriever.py`, `ingestion_src.py`), promoting maintainability and future expansion.
+* **Intelligent Agent with Fallback Logic:** The core of the system is now an agent that uses a "fallback" retrieval strategy. It first searches the local knowledge base. If it determines the retrieved documents are not relevant to the user's query, it automatically falls back to performing a live web search to find the answer.
+* **Web Search Capability:** The agent is integrated with the **Perplexity AI API**, giving it the ability to answer questions about recent events, new laws, or any topic not covered in the local document store.
+* **LLM-Powered Relevance Checking:** An LLM is used as an intelligent judge to analyse the documents retrieved from the local database and decide if they are sufficient to answer the user's query before deciding to use the web search tool.
+* **Vector Database & Hybrid Search:** **ChromaDB** remains the vector store for the local knowledge base, supporting a hybrid search that combines semantic and keyword retrieval.
+* **State-of-the-Art AI Models:**
+    * **Embedding Model:** Google's `text-embedding-004` creates high-quality vector embeddings.
+    * **Generative Model:** Google's `gemma-3-27b-it` is used for both summarising local context and for the internal relevance-checking logic.
+    * **Web Model:** The Perplexity model (configurable, e.g., `llama-3-sonar-large-32k-online`) is used for all web-based queries.
+* **FastAPI Backend:** The entire system is served via a high-performance API with two primary endpoints:
+    * `/ingest`: To dynamically upload new PDF documents to the local knowledge base.
+    * `/retrieve`: The main endpoint that now orchestrates the "search local -> check relevance -> fallback to web" logic.
+* **Modular & Scalable Codebase:** The project is structured into logical modules (`main.py`, `retriever_rag.py`, `ingestion_src.py`, `agent.py`) for maintainability.
 
 ---
 
