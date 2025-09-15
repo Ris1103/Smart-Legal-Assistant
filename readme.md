@@ -79,7 +79,9 @@ Create a file named `.env` in the app directory. This file will hold your API ke
 
 ```bash
 
-GOOGLE_API_KEY="YOUR_API_KEY_HERE"
+GOOGLE_API_KEY="YOUR_GOOGLE_API_KEY_HERE"
+PERPLEXITY_API_KEY="YOUR_PERPLEXITY_API_KEY_HERE"
+PERPLEXITY_MODEL_NAME="sonar"
 ```
 
 Replace "YOUR_API_KEY_HERE" with your actual Google AI Studio API key.
