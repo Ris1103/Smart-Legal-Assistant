@@ -1,7 +1,8 @@
 import os
 import json
 from datetime import datetime
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
+
 from dotenv import load_dotenv
 
 # --- LangChain and Google Imports ---
@@ -28,14 +29,9 @@ class HybridRAGPipeline:
     def __init__(self, chroma_dir: str = "chroma_db"):
         """
         Initialize the RAG pipeline with Google AI and hybrid search capabilities.
-
-        Args:
-            chroma_dir: Directory containing ChromaDB.
         """
         self.chroma_dir = chroma_dir
 
-        # --- 1. Configure Google AI ---
-        # The API key is loaded from the .env file
         try:
             genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
             logger.info("Google GenAI client configured successfully.")
@@ -43,59 +39,68 @@ class HybridRAGPipeline:
             logger.error(f"Failed to configure Google GenAI: {e}")
             raise
 
-        # --- 2. Initialize Google Models ---
         self.embedding_model = GoogleGenerativeAIEmbeddings(model="models/text-embedding-004")
         self.generative_model = genai.GenerativeModel("gemma-3-27b-it")
         logger.info("Initialized Google embedding and generative models.")
 
-        # Initialize ChromaDB vectorstore with the Google embedding model
         self.vectorstore = Chroma(
             persist_directory=chroma_dir,
             embedding_function=self.embedding_model,
             collection_name="legal_documents",
         )
 
-        # Initialize TF-IDF vectorizer for keyword search
         self.tfidf_vectorizer = TfidfVectorizer(
             max_features=10000, stop_words="english", ngram_range=(1, 2)
         )
+        # Prepare the corpus once on startup
+        self.refresh_tfidf_corpus()
 
-        # Prepare TF-IDF corpus from all documents in the vectorstore
-        self._prepare_tfidf_corpus()
-
-    def _prepare_tfidf_corpus(self):
-        """Prepare TF-IDF corpus from all documents in ChromaDB."""
+    def refresh_tfidf_corpus(self):
+        """
+        Refreshes the in-memory TF-IDF corpus from all documents in ChromaDB.
+        This should be called after new documents are ingested.
+        """
+        logger.info("Refreshing TF-IDF corpus from ChromaDB...")
         try:
             all_docs = self.vectorstore.get(include=["metadatas", "documents"])
             self.documents = all_docs.get("documents", [])
             self.metadatas = all_docs.get("metadatas", [])
-
             if self.documents:
                 self.tfidf_matrix = self.tfidf_vectorizer.fit_transform(self.documents)
-                logger.info(f"TF-IDF corpus prepared with {len(self.documents)} documents.")
+                logger.info(f"TF-IDF corpus refreshed with {len(self.documents)} documents.")
             else:
-                logger.warning("No documents found in ChromaDB.")
+                logger.warning("No documents found in ChromaDB during refresh.")
                 self.documents, self.metadatas, self.tfidf_matrix = [], [], None
         except Exception as e:
-            logger.error(f"Error preparing TF-IDF corpus: {e}")
+            logger.error(f"Error refreshing TF-IDF corpus: {e}")
             self.documents, self.metadatas, self.tfidf_matrix = [], [], None
 
-    def semantic_search_with_scores(self, query: str, k: int = 5) -> list[tuple[Document, float]]:
+    def semantic_search_with_scores(
+        self, query: str, k: int = 5, filename_filter: Optional[str] = None
+    ) -> list[tuple[Document, float]]:
         """
-        Perform semantic search and return documents with their relevance scores.
+        Perform semantic search with relevance scores, optionally filtering by filename.
         """
         try:
-            results = self.vectorstore.similarity_search_with_relevance_scores(query, k=k)
+            # Use a 'where' clause for efficient, database-level filtering
+            where_filter = {"filename": filename_filter} if filename_filter else None
+            results = self.vectorstore.similarity_search_with_relevance_scores(
+                query, k=k, where=where_filter
+            )
             logger.info(f"Semantic search with scores returned {len(results)} results.")
             return results
         except Exception as e:
             logger.error(f"Error in semantic search with scores: {e}")
             return []
 
-    def semantic_search(self, query: str, k: int = 5) -> List[Document]:
-        """Perform semantic search using ChromaDB."""
+    # --- RESTORED: This method is required by hybrid_search ---
+    def semantic_search(
+        self, query: str, k: int = 5, filename_filter: Optional[str] = None
+    ) -> List[Document]:
+        """Perform semantic search using ChromaDB, optionally filtering by filename."""
         try:
-            results = self.vectorstore.similarity_search(query, k=k)
+            where_filter = {"filename": filename_filter} if filename_filter else None
+            results = self.vectorstore.similarity_search(query, k=k, where=where_filter)
             logger.info(f"Semantic search returned {len(results)} results.")
             return results
         except Exception as e:
@@ -110,8 +115,7 @@ class HybridRAGPipeline:
             query_vector = self.tfidf_vectorizer.transform([query])
             similarities = cosine_similarity(query_vector, self.tfidf_matrix).flatten()
             top_indices = np.argsort(similarities)[::-1][:k]
-
-            results = [
+            return [
                 {
                     "content": self.documents[idx],
                     "metadata": self.metadatas[idx],
@@ -120,31 +124,40 @@ class HybridRAGPipeline:
                 for idx in top_indices
                 if similarities[idx] > 0
             ]
-            logger.info(f"Keyword search returned {len(results)} results.")
-            return results
         except Exception as e:
             logger.error(f"Error in keyword search: {e}")
             return []
 
     def hybrid_search(
-        self, query: str, k: int = 10, semantic_weight: float = 0.7
+        self,
+        query: str,
+        k: int = 10,
+        semantic_weight: float = 0.7,
+        filename_filter: Optional[str] = None,
     ) -> List[Document]:
-        """Perform hybrid search combining semantic and keyword results."""
-        semantic_results = self.semantic_search(query, k=k)
+        """Perform hybrid search, combining semantic and keyword results."""
+        # Note: Filtering is applied at the semantic level and post-retrieval for keyword
+        semantic_results = self.semantic_search(query, k=k, filename_filter=filename_filter)
         keyword_results = self.keyword_search(query, k=k)
+
+        # Post-filter keyword results if a filter is applied
+        if filename_filter:
+            keyword_results = [
+                res
+                for res in keyword_results
+                if res["metadata"].get("filename") == filename_filter
+            ]
 
         combined_results = {}
 
-        # Use a more robust key based on metadata if available
-        def doc_key(doc):
+        def doc_key(doc: Document) -> str:
+            """Create a unique key for a document."""
             return doc.metadata.get("source", doc.page_content[:100])
 
-        # Add semantic results with rank-based scoring
         for i, doc in enumerate(semantic_results):
             score = (k - i) / k * semantic_weight
             combined_results[doc_key(doc)] = {"document": doc, "score": score}
 
-        # Add or update with keyword results
         keyword_weight = 1 - semantic_weight
         for result in keyword_results:
             doc = Document(page_content=result["content"], metadata=result["metadata"])
@@ -156,51 +169,44 @@ class HybridRAGPipeline:
                 combined_results[key] = {"document": doc, "score": score}
 
         sorted_results = sorted(combined_results.values(), key=lambda x: x["score"], reverse=True)
-        final_results = [result["document"] for result in sorted_results[:k]]
-        logger.info(f"Hybrid search returned {len(final_results)} results.")
-        return final_results
+        return [result["document"] for result in sorted_results[:k]]
 
-    def summarize_with_gemma(self, context: str) -> str:
+    def process_query(
+        self,
+        query: str,
+        k: int = 5,
+        search_type: str = "hybrid",
+        filename_filter: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """
-        Summarize the retrieved context using the Gemma model with a system prompt.
+        Process a query and return summarized results, optionally filtering by filename.
         """
-        logger.info("Generating summary with Gemma...")
-        system_prompt = (
-            "You are an expert legal assistant. Your task is to provide a clear, "
-            "concise, and accurate summary of the provided legal text. Focus on the key "
-            "points, regulations, and conclusions. Do not add any information that is "
-            "not present in the text. Present the summary in a professional format."
+        logger.info(
+            f"Processing query: '{query}' with {search_type} search. Filter: {filename_filter}"
         )
-        prompt = f"{system_prompt}\n\n---CONTEXT---\n{context}\n\n---SUMMARY---"
 
-        try:
-            response = self.generative_model.generate_content(prompt)
-            return response.text
-        except Exception as e:
-            logger.error(f"Error during Gemma summarization: {e}")
-            return "Could not generate a summary due to an error."
-
-    def process_query(self, query: str, k: int = 5, search_type: str = "hybrid") -> Dict[str, Any]:
-        """Process a query and return summarized results."""
-        logger.info(f"Processing query: '{query}' with {search_type} search.")
+        results = []
         if search_type == "semantic":
-            results = self.semantic_search(query, k)
-        elif search_type == "keyword":
-            keyword_results = self.keyword_search(query, k)
-            results = [
-                Document(page_content=r["content"], metadata=r["metadata"])
-                for r in keyword_results
-            ]
-        else:  # 'hybrid'
-            results = self.hybrid_search(query, k)
+            results = self.semantic_search(query, k=k, filename_filter=filename_filter)
+        else:  # 'hybrid' or 'keyword'
+            results = self.hybrid_search(query, k=k, filename_filter=filename_filter)
+
+        # If hybrid search didn't yield enough results, we can just use semantic as a fallback
+        if not results and filename_filter:
+            results = self.semantic_search(query, k=k, filename_filter=filename_filter)
 
         if not results:
-            logger.warning("No results found for query.")
+            summary_message = "No relevant information found."
+            if filename_filter:
+                summary_message = (
+                    f"No relevant information found in the document '{filename_filter}'."
+                )
+            logger.warning("No results found for query after filtering.")
             return {
                 "query": query,
-                "summary": "No relevant information found in the documents.",
+                "summary": summary_message,
                 "results": [],
-                "metadata": {},
+                "metadata": {"source_files": [filename_filter or "All Documents"]},
             }
 
         combined_content = "\n\n".join([doc.page_content for doc in results])
@@ -230,26 +236,21 @@ class HybridRAGPipeline:
             "metadata": metadata,
         }
 
-    def save_results(self, results: Dict[str, Any], filename: str = None):
-        """Save results to a text file."""
-        if filename is None:
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = f"rag_results_{timestamp}.txt"
+    def summarize_with_gemma(self, context: str) -> str:
+        """
+        Summarize the retrieved context using the Gemma model with a system prompt.
+        """
+        logger.info("Generating summary with Gemma...")
+        system_prompt = (
+            "You are an expert legal assistant. Your task is to provide a clear, "
+            "concise, and accurate summary of the provided legal text. Focus on the key "
+            "points, regulations, and conclusions. Do not add any information that is "
+            "not present in the text. Present the summary in a professional format."
+        )
+        prompt = f"{system_prompt}\n\n---CONTEXT---\n{context}\n\n---SUMMARY---"
         try:
-            with open(filename, "w", encoding="utf-8") as f:
-                f.write(f"Query: {results['query']}\n")
-                f.write(f"Timestamp: {results['metadata'].get('timestamp')}\n\n")
-                f.write("=" * 20 + " SUMMARY " + "=" * 20 + "\n")
-                f.write(results["summary"] + "\n\n")
-                f.write("=" * 20 + " SOURCES " + "=" * 20 + "\n")
-                f.write(
-                    f"Source Files: {', '.join(results['metadata'].get('source_files', []))}\n\n"
-                )
-                f.write("=" * 20 + " DETAILS " + "=" * 20 + "\n")
-                for i, result in enumerate(results["results"], 1):
-                    f.write(f"\n--- Result {i} ---\n")
-                    f.write(f"Source: {result['metadata'].get('filename', 'N/A')}\n")
-                    f.write(f"Content: {result['content'][:500]}...\n")
-            logger.info(f"Results saved to {filename}")
+            response = self.generative_model.generate_content(prompt)
+            return response.text
         except Exception as e:
-            logger.error(f"Error saving results: {e}")
+            logger.error(f"Error during Gemma summarization: {e}")
+            return "Could not generate a summary due to an error."

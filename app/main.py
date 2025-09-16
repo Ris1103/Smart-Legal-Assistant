@@ -45,6 +45,10 @@ class RetrieveRequest(BaseModel):
     k: Optional[int] = Field(
         5, gt=0, le=20, description="Number of documents to retrieve for local search."
     )
+    # --- ADDED: Optional filter for scoped search ---
+    filename_filter: Optional[str] = Field(
+        None, min_length=1, description="Optional: Filename to scope the search to."
+    )
 
 
 class RetrieveResponse(BaseModel):
@@ -72,6 +76,11 @@ class IngestResponse(BaseModel):
     message: str
     filename: str
     chunks_added: int
+
+
+class RefreshResponse(BaseModel):
+    status: str
+    documents_indexed: int
 
 
 # --- API Endpoints ---
@@ -144,6 +153,22 @@ async def ingest(request: IngestRequest):
     except Exception as e:
         logger.error(f"Error during ingestion: {e}")
         raise HTTPException(status_code=500, detail="Failed to ingest the file.")
+
+
+@app.post("/refresh-index", response_model=RefreshResponse)
+async def refresh_index():
+    """
+    Manually triggers a refresh of the in-memory TF-IDF keyword index.
+    Should be called after a successful document ingestion.
+    """
+    if not rag_pipeline:
+        raise HTTPException(status_code=503, detail="RAG Pipeline is not available.")
+    try:
+        rag_pipeline.refresh_tfidf_corpus()
+        return RefreshResponse(status="success", documents_indexed=len(rag_pipeline.documents))
+    except Exception as e:
+        logger.error(f"Failed to refresh TF-IDF index: {e}")
+        raise HTTPException(status_code=500, detail="Failed to refresh index.")
 
 
 if __name__ == "__main__":
