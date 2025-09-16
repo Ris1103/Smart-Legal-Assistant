@@ -23,12 +23,12 @@ The project has evolved from a basic RAG pipeline into an intelligent, agent-dri
 * **LLM-Powered Relevance Checking:** An LLM is used as an intelligent judge to analyse the documents retrieved from the local database and decide if they are sufficient to answer the user's query before deciding to use the web search tool.
 * **Vector Database & Hybrid Search:** **ChromaDB** remains the vector store for the local knowledge base, supporting a hybrid search that combines semantic and keyword retrieval.
 * **State-of-the-Art AI Models:**
-    * **Embedding Model:** Google's `text-embedding-004` creates high-quality vector embeddings.
-    * **Generative Model:** Google's `gemma-3-27b-it` is used for both summarising local context and for the internal relevance-checking logic.
-    * **Web Model:** The Perplexity model (configurable, e.g., `llama-3-sonar-large-32k-online`) is used for all web-based queries.
+  * **Embedding Model:** Google's `text-embedding-004` creates high-quality vector embeddings.
+  * **Generative Model:** Google's `gemma-3-27b-it` is used for both summarising local context and for the internal relevance-checking logic.
+  * **Web Model:** The Perplexity model (configurable, e.g., `llama-3-sonar-large-32k-online`) is used for all web-based queries.
 * **FastAPI Backend:** The entire system is served via a high-performance API with two primary endpoints:
-    * `/ingest`: To dynamically upload new PDF documents to the local knowledge base.
-    * `/retrieve`: The main endpoint that now orchestrates the "search local -> check relevance -> fallback to web" logic.
+  * `/ingest`: To dynamically upload new PDF documents to the local knowledge base.
+  * `/retrieve`: The main endpoint that now orchestrates the "search local -> check relevance -> fallback to web" logic.
 * **Modular & Scalable Codebase:** The project is structured into logical modules (`main.py`, `retriever_rag.py`, `ingestion_src.py`, `agent.py`) for maintainability.
 
 ---
@@ -86,19 +86,34 @@ PERPLEXITY_MODEL_NAME="sonar"
 
 Replace "YOUR_API_KEY_HERE" with your actual Google AI Studio API key.
 
-### Step 5: Run the FastAPI Server
+### Step 5: Run the Application
 
-Start the web server using Uvicorn. The `--reload` flag will automatically restart the server when you make code changes.
+You need to run the backend and frontend in  **two separate terminals** .
+
+**Terminal 1: Start the FastAPI Backend**
+
+(Make sure you are in the `app` directory with your virtual environment activated)
 
 ```bash
 uvicorn main:app --reload
 ```
 
-The API will now be running at `http://127.0.0.1:8000`.
+The backend API will now be running at `http://127.0.0.1:8000`
 
-### Step 6: Interact with the API
+**Terminal 2: Start the Streamlit Frontend**
+*(Open a new terminal, navigate to the `app` directory, and activate the same virtual environment)*
 
-You can interact with the API using any HTTP client (like Postman, Insomnia, or curl), or by using the auto-generated documentation.
+```
+streamlit run streamlit_app.py
+```
+
+A new tab should automatically open in your browser at `http://localhost:8501`, displaying the user interface.
+
+### Step 6: Interact with the Application
+
+You can now use the Streamlit web interface to upload PDF documents and ask questions.
+
+For direct API testing, you can still use the auto-generated documentation by navigating to `http://127.0.0.1:8000/docs` in your browser.
 
 **Interactive Docs (Swagger UI):** Open your browser and navigate to `http://127.0.0.1:8000/docs`. Here you can test the endpoints directly.
 
