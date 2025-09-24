@@ -16,6 +16,8 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 import numpy as np
 import logging
+import mlflow
+
 
 # Load environment variables from .env file
 load_dotenv()
@@ -171,6 +173,7 @@ class HybridRAGPipeline:
         sorted_results = sorted(combined_results.values(), key=lambda x: x["score"], reverse=True)
         return [result["document"] for result in sorted_results[:k]]
 
+    @mlflow.trace(name="local_rag_pipeline")  # Give the trace a clear name
     def process_query(
         self,
         query: str,
@@ -179,7 +182,8 @@ class HybridRAGPipeline:
         filename_filter: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
-        Process a query and return summarized results, optionally filtering by filename.
+        Process a query and return summarized results.
+        This function is traced by MLflow.
         """
         logger.info(
             f"Processing query: '{query}' with {search_type} search. Filter: {filename_filter}"
@@ -188,57 +192,50 @@ class HybridRAGPipeline:
         results = []
         if search_type == "semantic":
             results = self.semantic_search(query, k=k, filename_filter=filename_filter)
-        else:  # 'hybrid' or 'keyword'
+        elif search_type == "keyword":
+            keyword_results = self.keyword_search(query, k=k)
+            if filename_filter:
+                keyword_results = [
+                    res
+                    for res in keyword_results
+                    if res["metadata"].get("filename") == filename_filter
+                ]
+            results = [
+                Document(page_content=r["content"], metadata=r["metadata"])
+                for r in keyword_results
+            ]
+        else:  # 'hybrid'
             results = self.hybrid_search(query, k=k, filename_filter=filename_filter)
 
-        # If hybrid search didn't yield enough results, we can just use semantic as a fallback
-        if not results and filename_filter:
-            results = self.semantic_search(query, k=k, filename_filter=filename_filter)
-
         if not results:
-            summary_message = "No relevant information found."
-            if filename_filter:
-                summary_message = (
-                    f"No relevant information found in the document '{filename_filter}'."
-                )
-            logger.warning("No results found for query after filtering.")
-            return {
-                "query": query,
-                "summary": summary_message,
-                "results": [],
-                "metadata": {"source_files": [filename_filter or "All Documents"]},
-            }
+            summary = "No relevant information found in the local documents."
+        else:
+            combined_content = "\n\n".join([doc.page_content for doc in results])
+            summary = self.summarize_with_gemma(combined_content)
 
-        combined_content = "\n\n".join([doc.page_content for doc in results])
-        summary = self.summarize_with_gemma(combined_content)
-
-        categories = {
-            doc.metadata.get("category") for doc in results if doc.metadata.get("category")
-        }
         filenames = {
             doc.metadata.get("filename") for doc in results if doc.metadata.get("filename")
         }
 
-        metadata = {
-            "num_results": len(results),
-            "categories": list(categories),
-            "source_files": list(filenames),
-            "search_type": search_type,
-            "timestamp": datetime.now().isoformat(),
-        }
-
+        # This function now returns the raw data. Logging is handled by the caller.
         return {
             "query": query,
             "summary": summary,
             "results": [
                 {"content": doc.page_content, "metadata": doc.metadata} for doc in results
             ],
-            "metadata": metadata,
+            "metadata": {
+                "num_results": len(results),
+                "source_files": list(filenames),
+                "search_type": search_type,
+                "timestamp": datetime.now().isoformat(),
+            },
         }
 
+    @mlflow.trace(name="gemma_summarizer")
     def summarize_with_gemma(self, context: str) -> str:
         """
-        Summarize the retrieved context using the Gemma model with a system prompt.
+        Summarize the retrieved context using the Gemma model. This is traced as a sub-span.
         """
         logger.info("Generating summary with Gemma...")
         system_prompt = (

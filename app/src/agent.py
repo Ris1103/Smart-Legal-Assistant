@@ -5,6 +5,7 @@ from langchain.schema import Document
 import google.generativeai as genai
 from fastapi.concurrency import run_in_threadpool
 from perplexipy import PerplexityClient
+import mlflow
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +60,7 @@ def is_context_relevant(
         return False
 
 
+@mlflow.trace(name="perplexity_web_search")
 async def search_perplexity(query: str) -> Dict[str, Any]:
     """
     Performs a search using the PerplexiPy library in a non-blocking way.

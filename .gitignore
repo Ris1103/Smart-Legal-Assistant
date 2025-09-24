@@ -7,3 +7,5 @@ chroma_db/
 .env
 sample_results/
 __pycache__/
+mlartifacts/
+mlruns/

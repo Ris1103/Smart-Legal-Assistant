@@ -1,18 +1,22 @@
 import logging
 from typing import List, Dict, Any, Optional
-
+import tempfile
+import os
 import uvicorn
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
+import mlflow
 
 # --- Local Imports (Updated to include the agent) ---
 from src.retriever.retriever_rag import HybridRAGPipeline
 from src.ingestion.ingestion_src import ingest_document_from_base64
 from src.agent import is_context_relevant, search_perplexity
+from src.evaluation.evaluation import calculate_faithfulness
 
 # --- Setup Logging ---
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+mlflow.set_experiment("Legal_RAG_Assistant")
 
 # --- FastAPI App Initialization ---
 app = FastAPI(
@@ -88,39 +92,64 @@ class RefreshResponse(BaseModel):
 
 @app.post("/retrieve", response_model=RetrieveResponse)
 async def retrieve(request: RetrieveRequest):
-    """
-    Receives a query, first attempts to find a relevant local answer,
-    and falls back to a web search if the local context is insufficient.
-    """
     if not rag_pipeline:
         raise HTTPException(status_code=503, detail="RAG Pipeline is not available.")
 
-    try:
-        # Step 1: Always perform a local search first to get documents and scores.
-        logger.info(f"Step 1: Performing local search for query: '{request.user_query}'")
-        local_results = rag_pipeline.semantic_search_with_scores(request.user_query, k=request.k)
+    run_name = f"query_{request.user_query[:50].replace(' ', '_')}"
 
-        # Extract just the documents to pass to the relevance checker.
-        documents_for_check = [doc for doc, score in local_results]
+    with mlflow.start_run(run_name=run_name) as run:
+        mlflow.log_param("user_query", request.user_query)
+        run_id = run.info.run_id
 
-        # Step 2: Use the agent to check if the retrieved context is relevant.
-        logger.info("Step 2: Checking relevance of local results.")
+        local_results_with_scores = rag_pipeline.semantic_search_with_scores(
+            request.user_query, k=request.k, filename_filter=request.filename_filter
+        )
+        documents_for_check = [doc for doc, score in local_results_with_scores]
+
         if is_context_relevant(
             request.user_query, documents_for_check, rag_pipeline.generative_model
         ):
-            # Step 3a: If relevant, process the query using the full RAG pipeline and return.
-            logger.info("Local context is RELEVANT. Generating summary from local documents.")
-            return rag_pipeline.process_query(
-                query=request.user_query, k=request.k, search_type=request.search_type
+            mlflow.log_param("tool_used", "local_search")
+            # This call will be traced because it's inside an active run
+            results = rag_pipeline.process_query(
+                query=request.user_query,
+                k=request.k,
+                search_type=request.search_type,
+                filename_filter=request.filename_filter,
             )
+            tool_used = "local_search"
         else:
-            # Step 3b: If not relevant, fall back to a web search.
-            logger.info("Local context is NOT RELEVANT or empty. Falling back to web search.")
-            return await search_perplexity(request.user_query)
+            mlflow.log_param("tool_used", "web_search")
+            # This call will be traced
+            results = await search_perplexity(request.user_query)
+            tool_used = "web_search"
 
-    except Exception as e:
-        logger.error(f"Error processing retrieve request: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Failed to process the query.")
+        summary = results["summary"]
+        retrieved_docs_list = results["results"]
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            context_path = os.path.join(tmpdir, "retrieved_context.txt")
+            summary_path = os.path.join(tmpdir, "generated_summary.txt")
+
+            context_str = "\n\n---\n\n".join([doc["content"] for doc in retrieved_docs_list])
+            with open(context_path, "w", encoding="utf-8") as f:
+                f.write(context_str)
+            with open(summary_path, "w", encoding="utf-8") as f:
+                f.write(summary)
+
+            mlflow.log_artifacts(tmpdir)
+
+        if tool_used == "local_search" and retrieved_docs_list:
+            faithfulness = calculate_faithfulness(
+                query=request.user_query,
+                retrieved_docs=retrieved_docs_list,
+                summary=summary,
+                model=rag_pipeline.generative_model,
+            )
+            mlflow.log_metric("faithfulness_score", faithfulness)
+
+        results["mlflow_run_id"] = run_id
+        return results
 
 
 @app.post("/ingest", response_model=IngestResponse)
