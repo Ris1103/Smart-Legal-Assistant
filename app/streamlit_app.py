@@ -5,9 +5,11 @@ import time
 import io
 from pypdf import PdfReader
 
+from config.settings import settings
+
 # --- Configuration ---
 st.set_page_config(page_title="Legal Assistant AI", layout="wide")
-FASTAPI_URL = "http://127.0.0.1:8000"
+FASTAPI_URL = settings.fastapi_url
 
 # --- Session State Initialization ---
 # Initialize keys for conversation history and for managing file processing logic.
@@ -98,17 +100,28 @@ if uploaded_file is not None and uploaded_file.file_id != st.session_state.proce
     with st.spinner(f"Processing and ingesting '{uploaded_file.name}'..."):
         ingest_result = call_ingest_api(uploaded_file)
         if ingest_result:
-            st.success(
-                f"Successfully ingested '{ingest_result['filename']}'. "
-                f"Added {ingest_result['chunks_added']} text chunks to the knowledge base."
-            )
-            # ENHANCEMENT: Store the filename for the next query.
-            st.session_state.last_uploaded_filename = ingest_result["filename"]
-            # FIX: Mark this file as processed.
             st.session_state.processed_file_id = uploaded_file.file_id
-            st.info(
-                f"Your next question will be specifically about **{ingest_result['filename']}**."
-            )
+            if ingest_result.get("status") == "duplicate":
+                st.warning(
+                    f"'{ingest_result['filename']}' is already in the "
+                    "knowledge base — skipping re-ingestion."
+                )
+                st.session_state.last_uploaded_filename = (
+                    ingest_result["filename"]
+                )
+            else:
+                st.success(
+                    f"Successfully ingested '{ingest_result['filename']}'. "
+                    f"Added {ingest_result['chunks_added']} text chunks "
+                    "to the knowledge base."
+                )
+                st.session_state.last_uploaded_filename = (
+                    ingest_result["filename"]
+                )
+                st.info(
+                    "Your next question will be specifically about "
+                    f"**{ingest_result['filename']}**."
+                )
 
 st.divider()
 

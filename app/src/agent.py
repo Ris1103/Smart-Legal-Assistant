@@ -1,37 +1,21 @@
-import os
 import logging
 from typing import Dict, Any, List
-from langchain.schema import Document
+
+import httpx
 import google.generativeai as genai
-from fastapi.concurrency import run_in_threadpool
-from perplexipy import PerplexityClient
 import mlflow
+
+from config.settings import settings
 
 logger = logging.getLogger(__name__)
 
-# --- CONFIGURATION ---
-PPLX_MODEL_NAME = os.getenv("PERPLEXITY_MODEL_NAME", "llama-3-sonar-large-32k-online")
-PPLX_API_KEY = os.getenv("PERPLEXITY_API_KEY")
-
-# Initialize the PerplexiPy client
-perplexity_client = None
-if PPLX_API_KEY:
-    try:
-        # --- FIX: Pass the API key directly to the constructor ---
-        perplexity_client = PerplexityClient(key=PPLX_API_KEY)
-        perplexity_client.model = PPLX_MODEL_NAME  # Set the model
-        logger.info(f"PerplexiPy client initialized. Using model: {PPLX_MODEL_NAME}")
-    except Exception as e:
-        logger.warning(f"Could not initialize PerplexiPy client: {e}")
-else:
-    logger.warning("PERPLEXITY_API_KEY not found. Perplexity web search will be disabled.")
-
 
 def is_context_relevant(
-    query: str, documents: List[Document], model: genai.GenerativeModel
+    query: str, documents: List, model: genai.GenerativeModel
 ) -> bool:
     """
     Uses an LLM to determine if the retrieved documents are relevant to the query.
+    Returns True if context is relevant, False otherwise.
     """
     if not documents:
         logger.info("No documents found, context is not relevant.")
@@ -39,21 +23,23 @@ def is_context_relevant(
 
     context = "\n\n".join([doc.page_content for doc in documents])
 
-    prompt = f"""
-    You are a relevance-checking assistant. Your task is to determine if the provided CONTEXT contains information that can directly answer the USER QUERY.
-    Respond with only the single word 'yes' or 'no'.
+    # Truncate outside the f-string to avoid literal comment text in the prompt
+    context_snippet = context[:32000]
 
-    ---CONTEXT---
-    {context[:4000]}  # Limit context to avoid overly long prompts
+    prompt = f"""You are a relevance-checking assistant. Your task is to determine if the provided CONTEXT contains information that can directly answer the USER QUERY.
+Respond with only the single word 'yes' or 'no'.
 
-    ---USER QUERY---
-    {query}
-    """
+---CONTEXT---
+{context_snippet}
+
+---USER QUERY---
+{query}
+"""
 
     try:
         response = model.generate_content(prompt)
         answer = response.text.strip().lower()
-        logger.info(f"Relevance check for query '{query}' returned: '{answer}'")
+        logger.info(f"Relevance check for query '{query[:60]}' returned: '{answer}'")
         return answer == "yes"
     except Exception as e:
         logger.error(f"Error during relevance check: {e}. Defaulting to 'not relevant'.")
@@ -63,23 +49,47 @@ def is_context_relevant(
 @mlflow.trace(name="perplexity_web_search")
 async def search_perplexity(query: str) -> Dict[str, Any]:
     """
-    Performs a search using the PerplexiPy library in a non-blocking way.
+    Performs a search using the Perplexity AI REST API via httpx.
     """
-    if not perplexity_client:
+    if not settings.perplexity_api_key:
+        logger.warning("PERPLEXITY_API_KEY not set. Web search unavailable.")
         return {
             "query": query,
-            "summary": "Perplexity client is not configured. Cannot perform web search.",
+            "summary": "Web search is not configured. Please set PERPLEXITY_API_KEY.",
             "results": [],
-            "metadata": {"source": "Perplexity AI (Error)"},
+            "metadata": {"source": "Perplexity AI (not configured)", "search_type": "web_search_fallback", "source_files": []},
         }
 
-    logger.info(f"Performing web search with PerplexiPy for: '{query}'")
+    system_message = (
+        "You are an expert legal assistant specialising in Indian law. "
+        "Provide a concise, accurate, and well-structured answer. "
+        "Always include a disclaimer that this is for informational purposes only and not formal legal advice."
+    )
+
+    payload = {
+        "model": settings.perplexity_model_name,
+        "messages": [
+            {"role": "system", "content": system_message},
+            {"role": "user", "content": query},
+        ],
+    }
+    headers = {
+        "Authorization": f"Bearer {settings.perplexity_api_key}",
+        "Content-Type": "application/json",
+    }
+
+    logger.info(f"Performing web search via Perplexity API for: '{query[:80]}'")
     try:
-        full_prompt = (
-            "You are an expert legal assistant. Provide a concise and accurate answer. "
-            f"Here is the user's query: {query}"
-        )
-        summary = await run_in_threadpool(perplexity_client.query, full_prompt)
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            response = await client.post(
+                "https://api.perplexity.ai/chat/completions",
+                headers=headers,
+                json=payload,
+            )
+            response.raise_for_status()
+
+        data = response.json()
+        summary = data["choices"][0]["message"]["content"]
 
         return {
             "query": query,
@@ -91,11 +101,19 @@ async def search_perplexity(query: str) -> Dict[str, Any]:
             },
         }
 
+    except httpx.HTTPStatusError as e:
+        logger.error(f"Perplexity API returned HTTP {e.response.status_code}: {e.response.text}")
+        return {
+            "query": query,
+            "summary": f"Web search failed (HTTP {e.response.status_code}). Please try again.",
+            "results": [],
+            "metadata": {"source": "Perplexity AI (Error)", "search_type": "web_search_fallback", "source_files": []},
+        }
     except Exception as e:
-        logger.error(f"Error calling PerplexiPy API: {e}")
+        logger.error(f"Error calling Perplexity API: {e}")
         return {
             "query": query,
             "summary": f"An error occurred during the web search: {e}",
             "results": [],
-            "metadata": {"source": "Perplexity AI (Error)"},
+            "metadata": {"source": "Perplexity AI (Error)", "search_type": "web_search_fallback", "source_files": []},
         }

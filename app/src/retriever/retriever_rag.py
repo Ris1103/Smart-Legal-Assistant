@@ -1,4 +1,4 @@
-import os
+import pathlib
 import json
 from datetime import datetime
 from typing import List, Dict, Any, Optional
@@ -18,8 +18,9 @@ import numpy as np
 import logging
 import mlflow
 
+from config.settings import settings
 
-# Load environment variables from .env file
+# Load environment variables from .env file (fallback for local dev)
 load_dotenv()
 
 # Setup logging
@@ -28,14 +29,28 @@ logger = logging.getLogger(__name__)
 
 
 class HybridRAGPipeline:
-    def __init__(self, chroma_dir: str = "chroma_db"):
+    def __init__(
+        self,
+        chroma_dir: Optional[str] = None,
+        collection_name: Optional[str] = None,
+    ):
         """
         Initialize the RAG pipeline with Google AI and hybrid search capabilities.
+
+        Args:
+            chroma_dir: Absolute path to ChromaDB persistence directory.
+                        Defaults to settings.chroma_db_path.
+            collection_name: ChromaDB collection to use.
+                             Defaults to settings.chroma_collection_name.
         """
-        self.chroma_dir = chroma_dir
+        # Resolve to an absolute path so the DB is always found regardless of
+        # the working directory from which the app is started.
+        raw_dir = chroma_dir or settings.chroma_db_path
+        self.chroma_dir = str(pathlib.Path(raw_dir).resolve())
+        self.collection_name = collection_name or settings.chroma_collection_name
 
         try:
-            genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
+            genai.configure(api_key=settings.google_api_key)
             logger.info("Google GenAI client configured successfully.")
         except Exception as e:
             logger.error(f"Failed to configure Google GenAI: {e}")
@@ -45,10 +60,11 @@ class HybridRAGPipeline:
         self.generative_model = genai.GenerativeModel("gemma-3-27b-it")
         logger.info("Initialized Google embedding and generative models.")
 
+        logger.info(f"Using ChromaDB at '{self.chroma_dir}', collection '{self.collection_name}'.")
         self.vectorstore = Chroma(
-            persist_directory=chroma_dir,
+            persist_directory=self.chroma_dir,
             embedding_function=self.embedding_model,
-            collection_name="legal_documents",
+            collection_name=self.collection_name,
         )
 
         self.tfidf_vectorizer = TfidfVectorizer(
@@ -60,7 +76,7 @@ class HybridRAGPipeline:
     def refresh_tfidf_corpus(self):
         """
         Refreshes the in-memory TF-IDF corpus from all documents in ChromaDB.
-        This should be called after new documents are ingested.
+        Call this after new documents are ingested.
         """
         logger.info("Refreshing TF-IDF corpus from ChromaDB...")
         try:
@@ -84,7 +100,6 @@ class HybridRAGPipeline:
         Perform semantic search with relevance scores, optionally filtering by filename.
         """
         try:
-            # Use a 'where' clause for efficient, database-level filtering
             where_filter = {"filename": filename_filter} if filename_filter else None
             results = self.vectorstore.similarity_search_with_relevance_scores(
                 query, k=k, where=where_filter
@@ -95,7 +110,6 @@ class HybridRAGPipeline:
             logger.error(f"Error in semantic search with scores: {e}")
             return []
 
-    # --- RESTORED: This method is required by hybrid_search ---
     def semantic_search(
         self, query: str, k: int = 5, filename_filter: Optional[str] = None
     ) -> List[Document]:
@@ -138,7 +152,6 @@ class HybridRAGPipeline:
         filename_filter: Optional[str] = None,
     ) -> List[Document]:
         """Perform hybrid search, combining semantic and keyword results."""
-        # Note: Filtering is applied at the semantic level and post-retrieval for keyword
         semantic_results = self.semantic_search(query, k=k, filename_filter=filename_filter)
         keyword_results = self.keyword_search(query, k=k)
 
@@ -153,7 +166,6 @@ class HybridRAGPipeline:
         combined_results = {}
 
         def doc_key(doc: Document) -> str:
-            """Create a unique key for a document."""
             return doc.metadata.get("source", doc.page_content[:100])
 
         for i, doc in enumerate(semantic_results):
@@ -173,20 +185,22 @@ class HybridRAGPipeline:
         sorted_results = sorted(combined_results.values(), key=lambda x: x["score"], reverse=True)
         return [result["document"] for result in sorted_results[:k]]
 
-    @mlflow.trace(name="local_rag_pipeline")  # Give the trace a clear name
+    @mlflow.trace(name="local_rag_pipeline")
     def process_query(
         self,
         query: str,
         k: int = 5,
         search_type: str = "hybrid",
         filename_filter: Optional[str] = None,
+        page: int = 1,
+        page_size: int = 5,
     ) -> Dict[str, Any]:
         """
-        Process a query and return summarized results.
-        This function is traced by MLflow.
+        Process a query and return summarized results with pagination support.
         """
         logger.info(
-            f"Processing query: '{query}' with {search_type} search. Filter: {filename_filter}"
+            f"Processing query: '{query}' with {search_type} search. "
+            f"Filter: {filename_filter}, page={page}, page_size={page_size}"
         )
 
         results = []
@@ -217,15 +231,23 @@ class HybridRAGPipeline:
             doc.metadata.get("filename") for doc in results if doc.metadata.get("filename")
         }
 
-        # This function now returns the raw data. Logging is handled by the caller.
+        # Apply pagination to the results list
+        total_results = len(results)
+        start = (page - 1) * page_size
+        end = start + page_size
+        paginated_results = results[start:end]
+
         return {
             "query": query,
             "summary": summary,
             "results": [
-                {"content": doc.page_content, "metadata": doc.metadata} for doc in results
+                {"content": doc.page_content, "metadata": doc.metadata}
+                for doc in paginated_results
             ],
             "metadata": {
-                "num_results": len(results),
+                "num_results": total_results,
+                "page": page,
+                "page_size": page_size,
                 "source_files": list(filenames),
                 "search_type": search_type,
                 "timestamp": datetime.now().isoformat(),
@@ -235,7 +257,7 @@ class HybridRAGPipeline:
     @mlflow.trace(name="gemma_summarizer")
     def summarize_with_gemma(self, context: str) -> str:
         """
-        Summarize the retrieved context using the Gemma model. This is traced as a sub-span.
+        Summarize the retrieved context using the Gemma model.
         """
         logger.info("Generating summary with Gemma...")
         system_prompt = (

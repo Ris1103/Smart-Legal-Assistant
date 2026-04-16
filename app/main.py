@@ -1,32 +1,61 @@
 import logging
-from typing import List, Dict, Any, Optional
-import tempfile
 import os
-import uvicorn
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, Field
-import mlflow
+import tempfile
+from typing import List, Dict, Any, Optional
 
-# --- Local Imports (Updated to include the agent) ---
+import uvicorn
+import mlflow
+from fastapi import (
+    FastAPI,
+    HTTPException,
+    BackgroundTasks,
+    Depends,
+    Security,
+)
+from fastapi.security.api_key import APIKeyHeader
+from pydantic import BaseModel, Field
+
+from config.settings import settings
 from src.retriever.retriever_rag import HybridRAGPipeline
 from src.ingestion.ingestion_src import ingest_document_from_base64
 from src.agent import is_context_relevant, search_perplexity
-from src.evaluation.evaluation import calculate_faithfulness
+from src.evaluation.evaluation import (
+    calculate_faithfulness,
+    FAITHFULNESS_ERROR_SENTINEL,
+)
 
-# --- Setup Logging ---
+# --- Setup ---
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 mlflow.set_experiment("Legal_RAG_Assistant")
 
-# --- FastAPI App Initialization ---
+# --- FastAPI App ---
 app = FastAPI(
     title="Legal RAG API",
-    description="An API for retrieving information from legal documents and ingesting new ones.",
-    version="1.0.0",
+    description=(
+        "API for retrieving information from legal documents "
+        "and ingesting new ones."
+    ),
+    version="1.1.0",
 )
 
-# --- Initialize the RAG Pipeline ---
-# This is created once when the app starts up.
+# --- API Key Auth ---
+# When settings.service_api_key is empty, auth is disabled (dev mode).
+_api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
+
+
+async def verify_api_key(
+    key: Optional[str] = Security(_api_key_header),
+):
+    if not settings.service_api_key:
+        return  # auth disabled in dev
+    if key != settings.service_api_key:
+        raise HTTPException(
+            status_code=403, detail="Invalid or missing API key."
+        )
+
+
+# --- RAG Pipeline (singleton) ---
 try:
     rag_pipeline = HybridRAGPipeline()
 except Exception as e:
@@ -34,48 +63,37 @@ except Exception as e:
     rag_pipeline = None
 
 
-# --- Pydantic Models (No changes here) ---
-
+# --- Pydantic Models ---
 
 class RetrieveRequest(BaseModel):
-    """Request model for the /retrieve endpoint."""
-
-    user_query: str = Field(..., min_length=3, description="The user's question.")
+    user_query: str = Field(..., min_length=3)
     search_type: Optional[str] = Field(
-        "hybrid",
-        pattern="^(semantic|keyword|hybrid)$",
-        description="Search type for local search: 'semantic', 'keyword', or 'hybrid'.",
+        "hybrid", pattern="^(semantic|keyword|hybrid)$"
     )
-    k: Optional[int] = Field(
-        5, gt=0, le=20, description="Number of documents to retrieve for local search."
-    )
-    # --- ADDED: Optional filter for scoped search ---
-    filename_filter: Optional[str] = Field(
-        None, min_length=1, description="Optional: Filename to scope the search to."
-    )
+    k: Optional[int] = Field(5, gt=0, le=20)
+    filename_filter: Optional[str] = Field(None, min_length=1)
+    page: Optional[int] = Field(1, ge=1)
+    page_size: Optional[int] = Field(5, ge=1, le=20)
+    collection: Optional[str] = Field(None)
 
 
 class RetrieveResponse(BaseModel):
-    """Response model for the /retrieve endpoint."""
-
     query: str
     summary: str
     results: List[Dict[str, Any]]
     metadata: Dict[str, Any]
+    mlflow_run_id: Optional[str] = None
 
 
 class IngestRequest(BaseModel):
-    """Request model for the /ingest endpoint."""
-
-    base64_text: str = Field(..., description="Base64 encoded content of the file.")
-    file_type: str = Field(..., pattern=r"^\.pdf$", description="File extension, e.g., '.pdf'.")
-    filename: str = Field(..., min_length=1, description="Original name of the file.")
-    metadata: Optional[Dict[str, Any]] = Field({}, description="Optional additional metadata.")
+    base64_text: str = Field(...)
+    file_type: str = Field(..., pattern=r"^\.pdf$")
+    filename: str = Field(..., min_length=1)
+    metadata: Optional[Dict[str, Any]] = Field({})
+    collection: Optional[str] = Field(None)
 
 
 class IngestResponse(BaseModel):
-    """Response model for the /ingest endpoint."""
-
     status: str
     message: str
     filename: str
@@ -87,13 +105,18 @@ class RefreshResponse(BaseModel):
     documents_indexed: int
 
 
-# --- API Endpoints ---
+# --- Endpoints ---
 
-
-@app.post("/retrieve", response_model=RetrieveResponse)
+@app.post(
+    "/retrieve",
+    response_model=RetrieveResponse,
+    dependencies=[Depends(verify_api_key)],
+)
 async def retrieve(request: RetrieveRequest):
     if not rag_pipeline:
-        raise HTTPException(status_code=503, detail="RAG Pipeline is not available.")
+        raise HTTPException(
+            status_code=503, detail="RAG Pipeline unavailable."
+        )
 
     run_name = f"query_{request.user_query[:50].replace(' ', '_')}"
 
@@ -101,44 +124,54 @@ async def retrieve(request: RetrieveRequest):
         mlflow.log_param("user_query", request.user_query)
         run_id = run.info.run_id
 
-        local_results_with_scores = rag_pipeline.semantic_search_with_scores(
-            request.user_query, k=request.k, filename_filter=request.filename_filter
+        local_results_with_scores = (
+            rag_pipeline.semantic_search_with_scores(
+                request.user_query,
+                k=request.k,
+                filename_filter=request.filename_filter,
+            )
         )
-        documents_for_check = [doc for doc, score in local_results_with_scores]
+        documents_for_check = [
+            doc for doc, _ in local_results_with_scores
+        ]
 
         if is_context_relevant(
-            request.user_query, documents_for_check, rag_pipeline.generative_model
+            request.user_query,
+            documents_for_check,
+            rag_pipeline.generative_model,
         ):
             mlflow.log_param("tool_used", "local_search")
-            # This call will be traced because it's inside an active run
             results = rag_pipeline.process_query(
                 query=request.user_query,
                 k=request.k,
                 search_type=request.search_type,
                 filename_filter=request.filename_filter,
+                page=request.page,
+                page_size=request.page_size,
             )
             tool_used = "local_search"
         else:
             mlflow.log_param("tool_used", "web_search")
-            # This call will be traced
             results = await search_perplexity(request.user_query)
             tool_used = "web_search"
 
         summary = results["summary"]
         retrieved_docs_list = results["results"]
 
+        # Log context and summary as MLflow artifacts
         with tempfile.TemporaryDirectory() as tmpdir:
-            context_path = os.path.join(tmpdir, "retrieved_context.txt")
-            summary_path = os.path.join(tmpdir, "generated_summary.txt")
-
-            context_str = "\n\n---\n\n".join([doc["content"] for doc in retrieved_docs_list])
-            with open(context_path, "w", encoding="utf-8") as f:
+            ctx_path = os.path.join(tmpdir, "retrieved_context.txt")
+            sum_path = os.path.join(tmpdir, "generated_summary.txt")
+            context_str = "\n\n---\n\n".join(
+                [doc["content"] for doc in retrieved_docs_list]
+            )
+            with open(ctx_path, "w", encoding="utf-8") as f:
                 f.write(context_str)
-            with open(summary_path, "w", encoding="utf-8") as f:
+            with open(sum_path, "w", encoding="utf-8") as f:
                 f.write(summary)
-
             mlflow.log_artifacts(tmpdir)
 
+        # Faithfulness — only for local search
         if tool_used == "local_search" and retrieved_docs_list:
             faithfulness = calculate_faithfulness(
                 query=request.user_query,
@@ -146,20 +179,32 @@ async def retrieve(request: RetrieveRequest):
                 summary=summary,
                 model=rag_pipeline.generative_model,
             )
-            mlflow.log_metric("faithfulness_score", faithfulness)
+            if faithfulness == FAITHFULNESS_ERROR_SENTINEL:
+                mlflow.log_metric("faithfulness_eval_error", 1)
+            else:
+                mlflow.log_metric("faithfulness_score", faithfulness)
 
         results["mlflow_run_id"] = run_id
         return results
 
 
-@app.post("/ingest", response_model=IngestResponse)
-async def ingest(request: IngestRequest):
+@app.post(
+    "/ingest",
+    response_model=IngestResponse,
+    dependencies=[Depends(verify_api_key)],
+)
+async def ingest(
+    request: IngestRequest, background_tasks: BackgroundTasks
+):
     """
-    Receives a file and ingests its content into the vector store
-    by calling the dedicated ingestion function.
+    Ingest a PDF into the vector store.
+    TF-IDF index is refreshed automatically in the background so
+    subsequent keyword searches reflect the new document immediately.
     """
     if not rag_pipeline:
-        raise HTTPException(status_code=503, detail="RAG Pipeline is not available.")
+        raise HTTPException(
+            status_code=503, detail="RAG Pipeline unavailable."
+        )
 
     try:
         chunks_added = ingest_document_from_base64(
@@ -170,37 +215,57 @@ async def ingest(request: IngestRequest):
             metadata=request.metadata,
         )
 
+        if chunks_added == 0:
+            return IngestResponse(
+                status="duplicate",
+                message=(
+                    "Document already exists in the knowledge base."
+                ),
+                filename=request.filename,
+                chunks_added=0,
+            )
+
+        # Refresh TF-IDF index in the background
+        background_tasks.add_task(rag_pipeline.refresh_tfidf_corpus)
+
         return IngestResponse(
             status="success",
             message="File ingested successfully.",
             filename=request.filename,
             chunks_added=chunks_added,
         )
-    except (ValueError, TypeError) as e:
-        logger.error(f"Invalid request for ingestion: {e}")
-        raise HTTPException(status_code=400, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=413, detail=str(e))
     except Exception as e:
         logger.error(f"Error during ingestion: {e}")
-        raise HTTPException(status_code=500, detail="Failed to ingest the file.")
+        raise HTTPException(
+            status_code=500, detail="Failed to ingest the file."
+        )
 
 
-@app.post("/refresh-index", response_model=RefreshResponse)
+@app.post(
+    "/refresh-index",
+    response_model=RefreshResponse,
+    dependencies=[Depends(verify_api_key)],
+)
 async def refresh_index():
-    """
-    Manually triggers a refresh of the in-memory TF-IDF keyword index.
-    Should be called after a successful document ingestion.
-    """
+    """Manually trigger a TF-IDF refresh (e.g. after bulk ingestion)."""
     if not rag_pipeline:
-        raise HTTPException(status_code=503, detail="RAG Pipeline is not available.")
+        raise HTTPException(
+            status_code=503, detail="RAG Pipeline unavailable."
+        )
     try:
         rag_pipeline.refresh_tfidf_corpus()
-        return RefreshResponse(status="success", documents_indexed=len(rag_pipeline.documents))
+        return RefreshResponse(
+            status="success",
+            documents_indexed=len(rag_pipeline.documents),
+        )
     except Exception as e:
         logger.error(f"Failed to refresh TF-IDF index: {e}")
-        raise HTTPException(status_code=500, detail="Failed to refresh index.")
+        raise HTTPException(
+            status_code=500, detail="Failed to refresh index."
+        )
 
 
 if __name__ == "__main__":
-    # To run this app, navigate to your terminal in this directory and execute:
-    # uvicorn main:app --reload
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
