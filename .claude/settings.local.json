@@ -1,7 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "Bash(find \"/d/Work/Projects02/Legal Advisor/app\" -type f -name \"*.py\" ! -path \"*/__pycache__/*\" ! -path \"*/.venv/*\" -exec ls -lh {} \\\\;)"
-    ]
-  }
-}
