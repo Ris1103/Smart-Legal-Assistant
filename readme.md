@@ -1,148 +1,177 @@
 # AI-Powered Legal Assistant for Indian SMBs
 
-## 1. Project Goal
-
-The ultimate goal of this project is to develop a sophisticated, AI-powered legal assistant specifically designed to meet the needs of Small and Medium-sized Businesses (SMBs) in India.
-
-The system is envisioned as a **hybrid RAG (Retrieval-Augmented Generation) + Agent system** capable of:
-
-- Providing contextually relevant legal advice based on a comprehensive knowledge base.
-- Generating legal documents and contracts tailored to user needs.
-- Offering a seamless, conversational user experience for complex legal queries.
-
-To achieve this, the final architecture will implement technologies such as **ChromaDB** for semantic search, **pgVector** for advanced hybrid queries, **Redis** for high-speed caching, and **Celery** for asynchronous task processing. The knowledge base will be built using a rich corpus of Indian legal templates, acts, and regulations.
+An intelligent legal advisory system for Indian small and medium businesses. Answers legal queries across GST, Income Tax, Company Law, Labour Law, and Criminal Law — and generates legal documents on demand — using a hybrid RAG knowledge base backed by Indian legal PDFs.
 
 ---
 
-## 2. Current Status (What has been implemented so far)
+## What's Been Built
 
-The project has evolved from a basic RAG pipeline into an intelligent, agent-driven system with access to real-time web information. The current implementation includes:
+### Phase 0 — Basic RAG Pipeline
+The starting point: a single FastAPI backend with a ChromaDB vector store, Google `text-embedding-004` embeddings, and `gemma-3-27b-it` for generation. Supported PDF ingestion and a `/retrieve` endpoint. No relevance checking or fallback.
 
-* **Intelligent Agent with Fallback Logic:** The core of the system is now an agent that uses a "fallback" retrieval strategy. It first searches the local knowledge base. If it determines the retrieved documents are not relevant to the user's query, it automatically falls back to performing a live web search to find the answer.
-* **Web Search Capability:** The agent is integrated with the **Perplexity AI API**, giving it the ability to answer questions about recent events, new laws, or any topic not covered in the local document store.
-* **LLM-Powered Relevance Checking:** An LLM is used as an intelligent judge to analyse the documents retrieved from the local database and decide if they are sufficient to answer the user's query before deciding to use the web search tool.
-* **Vector Database & Hybrid Search:** **ChromaDB** remains the vector store for the local knowledge base, supporting a hybrid search that combines semantic and keyword retrieval.
-* **State-of-the-Art AI Models:**
-  * **Embedding Model:** Google's `text-embedding-004` creates high-quality vector embeddings.
-  * **Generative Model:** Google's `gemma-3-27b-it` is used for both summarising local context and for the internal relevance-checking logic.
-  * **Web Model:** The Perplexity model (configurable, e.g., `llama-3-sonar-large-32k-online`) is used for all web-based queries.
-* **FastAPI Backend:** The entire system is served via a high-performance API with two primary endpoints:
-  * `/ingest`: To dynamically upload new PDF documents to the local knowledge base.
-  * `/retrieve`: The main endpoint that now orchestrates the "search local -> check relevance -> fallback to web" logic.
-* **Modular & Scalable Codebase:** The project is structured into logical modules (`main.py`, `retriever_rag.py`, `ingestion_src.py`, `agent.py`) for maintainability.
+### Phase 1 — Fix & Stabilize
+Hardened the foundation:
+- Pydantic `BaseSettings` for config (single `.env` source)
+- SHA-256 duplicate detection on ingest; file size validation
+- TF-IDF keyword search layered on top of semantic search (hybrid retrieval)
+- LLM-powered relevance check; Perplexity web search fallback via async `httpx`
+- Faithfulness scoring with a sentinel value (`-1.0`) distinguishing eval errors from unfaithful responses
+- API key auth on all endpoints (`X-API-Key` header; disabled when key is empty)
+- MLflow tracing on every `/retrieve` call (artifacts + metrics logged to `app/mlruns/`)
+- Test suite: 29 tests across `test_agent.py`, `test_ingestion.py`, `test_evaluation.py`, `test_api.py`
+
+### Phase 2 — Multi-Agent Architecture (LangGraph)
+Replaced the single-agent path with a stateful multi-agent pipeline on `POST /query`:
+
+```
+[orchestrator] → classifies domain + confidence
+    ├── confidence < 0.6       → [web_research] → END
+    ├── intent == "contract"   → [contract]     → END
+    └── otherwise              → [domain_agent] → [qa]
+                                                    ├── qa_passed   → END
+                                                    └── !qa_passed  → [domain_agent] (max 2 retries)
+```
+
+- **Orchestrator** — Gemini classifies the query into domain, confidence score, and intent
+- **6 Domain Specialists** — GST, Income Tax, Company Law, Labour Law, Criminal Law, General; each with a dedicated ChromaDB collection and system prompt
+- **QA Agent** — faithfulness + disclaimer + completeness gate; feeds feedback back for up to 2 retries
+- **Contract Agent** — extracts parameters from natural language and renders Jinja2 templates (NDA, service agreement, employment agreement)
+- **Web Research Agent** — async Perplexity fallback for low-confidence or out-of-KB queries
+- MLflow tracing extended to `/query` (domain, search type, faithfulness score logged per run)
 
 ---
 
-## 3. How to Run the Project
+## What's Next
 
-Follow these steps to set up and run the project locally.
+### Phase 3 — MCP Integration
+Replace direct service calls with standardised MCP (Model Context Protocol) servers, each a separate FastAPI service:
+
+| Server | Replaces | Exposed Tools |
+|--------|----------|---------------|
+| `mcp_servers/filesystem_server/` | base64-over-HTTP ingest | `upload_document`, `list_documents`, `delete_document`, `get_metadata` |
+| `mcp_servers/database_server/` | direct ChromaDB/PostgreSQL calls | `query_contracts`, `get_template`, `save_contract` |
+| `mcp_servers/search_server/` | hardcoded Perplexity REST in `web_research_agent.py` | `web_search(query, num_results)` — provider-agnostic |
+
+Stretch goals: Indian Kanoon MCP (case law), MCA MCP (company registry), GSTN MCP (live GST rates).
+
+### Phase 4 — AWS Deployment
+Deploy on AWS Free Tier with a clear migration path to production scale:
+
+- **Compute** — EC2 t2.micro + Docker Compose + Nginx reverse proxy + Let's Encrypt TLS
+- **Data** — RDS db.t3.micro PostgreSQL, S3 (documents + MLflow artifacts), ChromaDB on EBS backed up to S3
+- **Session cache** — `cachetools.TTLCache` in-process (ElastiCache is not free tier)
+- **Observability** — CloudWatch logs + custom metrics, MLflow on RDS+S3 backend, X-Ray tracing
+- **CI/CD** — GitHub Actions → ECR → EC2 Docker Compose (staging) → manual approval → prod
+- **IaC** — AWS CDK (Python) in `infra/stacks/` covering network, database, storage, API gateway, and monitoring
+- **Migration path** — EC2 Docker Compose → ECS Fargate when free tier expires
+
+---
+
+## Setup
 
 ### Prerequisites
-
 - Python 3.12
-- A virtual environment tool like `venv` (recommended)
 
-### Step 1: Clone the Repository
+### 1. Clone the repo
 
 ```bash
 git clone <your-repository-url>
-cd <your-project-directory>/app
-```bash
-
-### Step 2: Set Up the Python Environment
-Create and activate a virtual environment within the app directory.
-
-On macOS/Linux:
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
+cd <your-project-directory>
 ```
 
-On Windows:
+### 2. Create virtual environment
 
 ```bash
-python -m venv .venv
-.\.venv\Scripts\activate
+# Windows
+python -m venv app/.venv
+app\.venv\Scripts\activate
+
+# macOS / Linux
+python3 -m venv app/.venv
+source app/.venv/bin/activate
 ```
 
-### Step 3: Install Dependencies
-
-Install all the required packages from the requirements.txt file.
+### 3. Install dependencies
 
 ```bash
+cd app
 pip install -r requirements.txt
 ```
 
-### Step 4: Configure Environment Variables
-
-Create a file named `.env` in the app directory. This file will hold your API key. Add the following line to it:
+### 4. Configure environment variables
 
 ```bash
-
-GOOGLE_API_KEY="YOUR_GOOGLE_API_KEY_HERE"
-PERPLEXITY_API_KEY="YOUR_PERPLEXITY_API_KEY_HERE"
-PERPLEXITY_MODEL_NAME="sonar"
+cp app/.env-example app/.env
 ```
 
-Replace "YOUR_API_KEY_HERE" with your actual Google AI Studio API key.
+Fill in `app/.env`:
 
-### Step 5: Run the Application
+```env
+GOOGLE_API_KEY=your_google_api_key_here
+PERPLEXITY_API_KEY=your_perplexity_api_key_here
+PERPLEXITY_MODEL_NAME=sonar
+SERVICE_API_KEY=          # leave empty to disable auth in dev
+```
 
-You need to run the backend and frontend in  **two separate terminals** .
+### 5. Run
 
-**Terminal 1: Start the FastAPI Backend**
+Open two terminals with the venv activated and `cd app`:
 
-(Make sure you are in the `app` directory with your virtual environment activated)
-
+**Terminal 1 — backend:**
 ```bash
 uvicorn main:app --reload
 ```
+API at `http://localhost:8000` · Swagger UI at `http://localhost:8000/docs`
 
-The backend API will now be running at `http://127.0.0.1:8000`
-
-**Terminal 2: Start the Streamlit Frontend**
-*(Open a new terminal, navigate to the `app` directory, and activate the same virtual environment)*
-
-```
+**Terminal 2 — frontend:**
+```bash
 streamlit run streamlit_app.py
 ```
+UI at `http://localhost:8501`
 
-A new tab should automatically open in your browser at `http://localhost:8501`, displaying the user interface.
+---
 
-### Step 6: Interact with the Application
+## API Reference
 
-You can now use the Streamlit web interface to upload PDF documents and ask questions.
-
-For direct API testing, you can still use the auto-generated documentation by navigating to `http://127.0.0.1:8000/docs` in your browser.
-
-**Interactive Docs (Swagger UI):** Open your browser and navigate to `http://127.0.0.1:8000/docs`. Here you can test the endpoints directly.
-
-**Example curl Commands:**
-
-To ingest a new document:
-(You will need to first Base64-encode your PDF file)
-
+### POST /query *(preferred)*
 ```bash
-curl -X 'POST' \
-  'http://127.0.0.1:8000/ingest' \
-  -H 'accept: application/json' \
-  -H 'Content-Type: application/json' \
-  -d '{
-  "base64_text": "YOUR_BASE64_ENCODED_PDF_STRING",
-  "file_type": ".pdf",
-  "filename": "my_new_legal_document.pdf",
-  "metadata": {}
-}'
+curl -X POST http://localhost:8000/query \
+  -H "Content-Type: application/json" \
+  -d '{"query": "What is the penalty for late GST filing?"}'
 ```
 
-To retrieve an answer:
+### POST /contracts/generate
+```bash
+curl -X POST http://localhost:8000/contracts/generate \
+  -H "Content-Type: application/json" \
+  -d '{"user_query": "Draft an NDA between Acme Corp and John Doe for a software project"}'
+```
+
+### POST /ingest
+```bash
+curl -X POST http://localhost:8000/ingest \
+  -H "Content-Type: application/json" \
+  -d '{
+    "base64_text": "<base64-encoded-pdf>",
+    "file_type": ".pdf",
+    "filename": "gst_act_2017.pdf",
+    "metadata": {}
+  }'
+```
+
+### POST /retrieve *(legacy)*
+```bash
+curl -X POST http://localhost:8000/retrieve \
+  -H "Content-Type: application/json" \
+  -d '{"user_query": "What are the penalties under the Income Tax Act?"}'
+```
+
+> Add `-H "X-API-Key: your_key"` when `SERVICE_API_KEY` is set.
+
+---
+
+## Tests
 
 ```bash
-curl -X 'POST' \
-  'http://127.0.0.1:8000/retrieve' \
-  -H 'accept: application/json' \
-  -H 'Content-Type: application/json' \
-  -d '{
-  "user_query": "What are the penalties under the Income Tax Act?"
-}'
+cd app && pytest tests/ -v
 ```

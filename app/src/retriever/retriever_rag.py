@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 # --- LangChain and Google Imports ---
 from langchain_chroma import Chroma
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
-from langchain.schema import Document
+from langchain_core.documents import Document
 import google.generativeai as genai
 
 # --- Standard Library Imports ---

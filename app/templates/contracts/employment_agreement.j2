@@ -1,0 +1,71 @@
+EMPLOYMENT AGREEMENT
+
+This Employment Agreement ("Agreement") is entered into as of
+{{ effective_date | default("____________") }}, between:
+
+Employer: {{ employer_name | default("[Employer Name]") }}
+Address:  {{ employer_address | default("[Employer Address]") }}
+
+AND
+
+Employee: {{ employee_name | default("[Employee Name]") }}
+Address:  {{ employee_address | default("[Employee Address]") }}
+
+1. POSITION AND DUTIES
+   The Employer hereby employs the Employee as
+   {{ designation | default("[Designation]") }} in the
+   {{ department | default("[Department]") }} department.
+   The Employee shall report to {{ reporting_to | default("[Manager Name/Title]") }}.
+
+2. COMMENCEMENT AND TERM
+   Employment shall commence on {{ start_date | default("[Start Date]") }}
+   {% if employment_type == "fixed" %}
+   and shall be for a fixed term ending {{ end_date | default("[End Date]") }}.
+   {% else %}
+   and shall continue until terminated in accordance with this Agreement.
+   {% endif %}
+
+3. COMPENSATION
+   a) Basic Salary: INR {{ basic_salary | default("[Amount]") }} per month
+   b) Other Allowances: {{ allowances | default("[HRA, Travel, etc.]") }}
+   c) Total CTC: INR {{ ctc | default("[Total CTC]") }} per annum
+   Salary shall be paid on or before the {{ pay_day | default("last") }}
+   working day of each month.
+
+4. WORKING HOURS
+   The standard working hours shall be
+   {{ working_hours | default("9 hours per day, 5 days a week") }}.
+
+5. LEAVE
+   The Employee shall be entitled to:
+   - {{ annual_leave | default("18") }} days of paid annual leave per year
+   - {{ sick_leave | default("12") }} days of sick leave per year
+   - Public holidays as declared by the Employer
+
+6. CONFIDENTIALITY AND NON-COMPETE
+   The Employee agrees to maintain strict confidentiality of all
+   proprietary information and shall not engage in any competing business
+   during employment and for {{ non_compete_period | default("1 year") }}
+   after cessation of employment.
+
+7. TERMINATION
+   Either Party may terminate this Agreement by providing
+   {{ notice_period | default("30 days'") }} written notice.
+   The Employer may terminate immediately for cause.
+
+8. GOVERNING LAW
+   This Agreement is governed by Indian labour laws, including the
+   applicable Labour Codes, and subject to jurisdiction in
+   {{ jurisdiction | default("Mumbai") }}.
+
+IN WITNESS WHEREOF, the Parties have executed this Agreement.
+
+_______________________________     _______________________________
+For {{ employer_name | default("[Employer]") }}      {{ employee_name | default("[Employee]") }}
+Authorised Signatory                Employee
+Date: ________________________      Date: ________________________
+
+---
+DISCLAIMER: This document is a template for informational purposes only
+and does not constitute legal advice. Consult a qualified advocate before
+executing any legal agreement.

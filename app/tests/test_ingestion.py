@@ -1,5 +1,5 @@
 """
-Tests for ingestion_src: duplicate detection, file size limit, category assignment.
+Tests for ingestion_src: duplicate detection, file size, category.
 """
 import base64
 import hashlib
@@ -7,7 +7,10 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from src.ingestion.ingestion_src import get_category, ingest_document_from_base64
+from src.ingestion.ingestion_src import (
+    get_category,
+    ingest_document_from_base64,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -68,7 +71,9 @@ class TestDuplicateDetection:
     def _make_tiny_pdf_b64(self) -> tuple[str, str]:
         """Return (base64_str, sha256_hex) for a minimal fake PDF."""
         content = b"%PDF-1.4 fake content"
-        return base64.b64encode(content).decode(), hashlib.sha256(content).hexdigest()
+        encoded = base64.b64encode(content).decode()
+        digest = hashlib.sha256(content).hexdigest()
+        return encoded, digest
 
     def test_duplicate_returns_zero(self):
         b64, file_hash = self._make_tiny_pdf_b64()
@@ -101,7 +106,7 @@ class TestDuplicateDetection:
             with patch(
                 "src.ingestion.ingestion_src.PyPDFLoader"
             ) as mock_loader_cls:
-                from langchain.schema import Document
+                from langchain_core.documents import Document
                 mock_loader = MagicMock()
                 mock_loader.load.return_value = [
                     Document(page_content="Test content", metadata={})

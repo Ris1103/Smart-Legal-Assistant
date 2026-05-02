@@ -1,0 +1,62 @@
+SERVICE AGREEMENT
+
+This Service Agreement ("Agreement") is entered into as of
+{{ effective_date | default("____________") }}, between:
+
+Service Provider: {{ provider_name | default("[Provider Name]") }}
+Address:          {{ provider_address | default("[Provider Address]") }}
+GST No.:          {{ provider_gst | default("[GST Number]") }}
+
+AND
+
+Client:   {{ client_name | default("[Client Name]") }}
+Address:  {{ client_address | default("[Client Address]") }}
+GST No.:  {{ client_gst | default("[GST Number]") }}
+
+1. SCOPE OF SERVICES
+   The Service Provider agrees to provide the following services
+   ("Services") to the Client:
+   {{ services_description | default("[Detailed description of services]") }}
+
+2. TERM
+   This Agreement shall commence on {{ start_date | default("[Start Date]") }}
+   and shall continue until {{ end_date | default("[End Date]") }}, unless
+   terminated earlier in accordance with the terms hereof.
+
+3. FEES AND PAYMENT
+   The Client shall pay the Service Provider a fee of
+   {{ fee_amount | default("[Amount]") }} ({{ fee_currency | default("INR") }})
+   {{ fee_schedule | default("per month, payable within 30 days of invoice") }}.
+   GST shall be charged at the applicable rate over and above the fee.
+
+4. INTELLECTUAL PROPERTY
+   All work product, deliverables, and intellectual property created by
+   the Service Provider under this Agreement shall be the exclusive
+   property of {{ ip_owner | default("the Client") }} upon full payment.
+
+5. CONFIDENTIALITY
+   Both Parties agree to keep confidential all proprietary information
+   received from the other Party and not to disclose it to any third
+   party without prior written consent.
+
+6. TERMINATION
+   Either Party may terminate this Agreement by giving
+   {{ notice_period | default("30 (thirty) days'") }} written notice to
+   the other Party.
+
+7. GOVERNING LAW
+   This Agreement shall be governed by the laws of India and subject to
+   the jurisdiction of courts in {{ jurisdiction | default("Mumbai") }}.
+
+IN WITNESS WHEREOF, the Parties have executed this Agreement as of the
+date first written above.
+
+_______________________________     _______________________________
+{{ provider_name | default("[Provider]") }}         {{ client_name | default("[Client]") }}
+Authorised Signatory                Authorised Signatory
+Date: ________________________      Date: ________________________
+
+---
+DISCLAIMER: This document is a template for informational purposes only
+and does not constitute legal advice. Consult a qualified advocate before
+executing any legal agreement.

@@ -23,6 +23,8 @@ from src.evaluation.evaluation import (
     calculate_faithfulness,
     FAITHFULNESS_ERROR_SENTINEL,
 )
+from api.routes.query import get_query_router
+from api.routes.contracts import get_contracts_router
 
 # --- Setup ---
 logging.basicConfig(level=logging.INFO)
@@ -36,7 +38,7 @@ app = FastAPI(
         "API for retrieving information from legal documents "
         "and ingesting new ones."
     ),
-    version="1.1.0",
+    version="2.0.0",
 )
 
 # --- API Key Auth ---
@@ -61,6 +63,10 @@ try:
 except Exception as e:
     logger.error(f"Fatal error during RAG Pipeline initialization: {e}")
     rag_pipeline = None
+
+# --- Phase 2 Multi-Agent Routes ---
+app.include_router(get_query_router(rag_pipeline, verify_api_key))
+app.include_router(get_contracts_router(rag_pipeline, verify_api_key))
 
 
 # --- Pydantic Models ---

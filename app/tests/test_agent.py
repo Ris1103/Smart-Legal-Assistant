@@ -4,7 +4,7 @@ Tests for agent.py: relevance check, Perplexity fallback behavior.
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from langchain.schema import Document
+from langchain_core.documents import Document
 
 from src.agent import is_context_relevant, search_perplexity
 

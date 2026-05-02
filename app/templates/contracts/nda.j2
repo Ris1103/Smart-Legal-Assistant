@@ -1,0 +1,56 @@
+NON-DISCLOSURE AGREEMENT
+
+This Non-Disclosure Agreement ("Agreement") is entered into as of
+{{ effective_date | default("____________") }}, between:
+
+Party A: {{ party_a_name | default("[Party A Name]") }}
+Address:  {{ party_a_address | default("[Party A Address]") }}
+
+AND
+
+Party B: {{ party_b_name | default("[Party B Name]") }}
+Address:  {{ party_b_address | default("[Party B Address]") }}
+
+(Each individually referred to as a "Party" and collectively as the "Parties")
+
+1. CONFIDENTIAL INFORMATION
+   "Confidential Information" means any data or information that is
+   proprietary to the disclosing Party and not generally known to the
+   public, including but not limited to: {{ confidential_info_description
+   | default("business strategies, technical data, trade secrets, and
+   proprietary business information") }}.
+
+2. OBLIGATIONS OF RECEIVING PARTY
+   The Receiving Party agrees to:
+   a) Hold the Confidential Information in strict confidence;
+   b) Not disclose the Confidential Information to any third party
+      without the prior written consent of the Disclosing Party;
+   c) Use the Confidential Information solely for the purpose of
+      {{ purpose | default("[stated business purpose]") }}.
+
+3. TERM
+   This Agreement shall remain in effect for a period of
+   {{ term | default("2 (two) years") }} from the Effective Date,
+   unless terminated earlier by mutual written agreement.
+
+4. GOVERNING LAW
+   This Agreement shall be governed by and construed in accordance with
+   the laws of India. Any disputes shall be subject to the exclusive
+   jurisdiction of the courts in {{ jurisdiction | default("Mumbai") }}.
+
+5. ENTIRE AGREEMENT
+   This Agreement constitutes the entire agreement between the Parties
+   with respect to the subject matter hereof.
+
+IN WITNESS WHEREOF, the Parties have executed this Agreement as of the
+date first written above.
+
+_______________________________     _______________________________
+{{ party_a_name | default("[Party A]") }}          {{ party_b_name | default("[Party B]") }}
+Authorised Signatory                Authorised Signatory
+Date: ________________________      Date: ________________________
+
+---
+DISCLAIMER: This document is a template for informational purposes only
+and does not constitute legal advice. Consult a qualified advocate before
+executing any legal agreement.
