@@ -7,6 +7,8 @@ class Settings(BaseSettings):
     google_api_key: str
     perplexity_api_key: str = ""
     perplexity_model_name: str = "llama-3-sonar-large-32k-online"
+    tavily_api_key: str = ""
+    grok_api_key: str = ""
 
     # --- Service Config ---
     fastapi_url: str = "http://localhost:8000"
@@ -20,6 +22,33 @@ class Settings(BaseSettings):
 
     # --- Ingestion limits ---
     max_file_size_mb: int = 50
+
+    # --- Models ---
+    generative_model_name: str = "gemma-4-26b-a4b-it"
+    embedding_provider: str = "google"   # "google" | "bge"
+    bge_model_name: str = "BAAI/bge-m3"
+    grok_model_name: str = "grok-3"
+
+    # --- Chunking ---
+    chunk_strategy: str = "recursive"   # "recursive" | "semantic"
+    chunk_size: int = 1000
+    chunk_overlap: int = 200
+
+    # --- Retrieval ---
+    semantic_weight: float = 0.7
+    reranker_enabled: bool = False
+    reranker_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+    top_k_retrieval: int = 8
+
+    # --- Context Compression ---
+    context_compression_enabled: bool = False
+    compression_similarity_threshold: float = 0.5
+
+    # --- Evaluation ---
+    evaluation_framework: str = "custom"   # "custom" | "ragas"
+
+    # --- Web Search ---
+    web_search_provider: str = "perplexity"   # "perplexity" | "tavily" | "grok"
 
     class Config:
         env_file = ".env"

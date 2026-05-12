@@ -97,6 +97,7 @@ def get_query_router(rag_pipeline, verify_api_key):
             faithfulness = final_state.get(
                 "faithfulness_score", FAITHFULNESS_ERROR_SENTINEL
             )
+            ragas_scores = final_state.get("ragas_scores") or {}
 
             # MLflow logging
             mlflow.log_param("domain", domain)
@@ -107,6 +108,10 @@ def get_query_router(rag_pipeline, verify_api_key):
                 mlflow.log_metric("faithfulness_eval_error", 1)
             elif faithfulness >= 0:
                 mlflow.log_metric("faithfulness_score", faithfulness)
+
+            for metric_name, score in ragas_scores.items():
+                if score != FAITHFULNESS_ERROR_SENTINEL:
+                    mlflow.log_metric(f"ragas_{metric_name}", score)
 
             # Persist artifacts
             with tempfile.TemporaryDirectory() as tmpdir:

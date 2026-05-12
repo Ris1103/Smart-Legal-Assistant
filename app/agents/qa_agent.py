@@ -13,11 +13,13 @@ from datetime import datetime
 
 import google.generativeai as genai
 
+from config.settings import settings
 from graph.state import AgentState
 from src.evaluation.evaluation import (
     FAITHFULNESS_ERROR_SENTINEL,
     calculate_faithfulness,
 )
+from src.evaluation.ragas_eval import evaluate_with_ragas
 
 logger = logging.getLogger(__name__)
 
@@ -58,13 +60,20 @@ class QAAgent:
 
         issues = []
 
-        # 1. Faithfulness
-        faithfulness = calculate_faithfulness(
-            query=query,
-            retrieved_docs=docs,
-            summary=summary,
-            model=self.model,
-        )
+        # 1. Faithfulness (+ optional RAGAS metrics)
+        ragas_scores: dict = {}
+        if settings.evaluation_framework == "ragas":
+            contexts = [d["content"] for d in docs if d.get("content")]
+            ragas_scores = evaluate_with_ragas(query, summary, contexts)
+            faithfulness = ragas_scores.get("faithfulness", FAITHFULNESS_ERROR_SENTINEL)
+        else:
+            faithfulness = calculate_faithfulness(
+                query=query,
+                retrieved_docs=docs,
+                summary=summary,
+                model=self.model,
+            )
+
         if faithfulness == FAITHFULNESS_ERROR_SENTINEL:
             logger.warning("QA: faithfulness eval errored — skipping check.")
         elif faithfulness < FAITHFULNESS_THRESHOLD:
@@ -94,15 +103,19 @@ class QAAgent:
                 logger.warning(
                     f"QA: max retries reached with issues: {issues}"
                 )
+            eval_meta = {"faithfulness_score": faithfulness}
+            if ragas_scores:
+                eval_meta.update(ragas_scores)
             return {
                 **state,
                 "qa_passed": True,
                 "faithfulness_score": faithfulness,
+                "ragas_scores": ragas_scores or None,
                 "metadata": {
                     **(state.get("metadata") or {}),
                     "qa_retries": retries,
                     "qa_issues": issues,
-                    "faithfulness_score": faithfulness,
+                    **eval_meta,
                     "timestamp": datetime.now().isoformat(),
                 },
             }

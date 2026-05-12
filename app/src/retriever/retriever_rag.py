@@ -7,9 +7,10 @@ from dotenv import load_dotenv
 
 # --- LangChain and Google Imports ---
 from langchain_chroma import Chroma
-from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from langchain_core.documents import Document
 import google.generativeai as genai
+
+from src.retriever.embedder_factory import get_embedder
 
 # --- Standard Library Imports ---
 from sklearn.feature_extraction.text import TfidfVectorizer
@@ -56,9 +57,15 @@ class HybridRAGPipeline:
             logger.error(f"Failed to configure Google GenAI: {e}")
             raise
 
-        self.embedding_model = GoogleGenerativeAIEmbeddings(model="models/text-embedding-004")
-        self.generative_model = genai.GenerativeModel("gemma-3-27b-it")
-        logger.info("Initialized Google embedding and generative models.")
+        self.embedding_model = get_embedder(settings)
+        self.generative_model = genai.GenerativeModel(settings.generative_model_name)
+        logger.info(
+            f"Initialized embedding ({settings.embedding_provider}) and "
+            f"generative model ({settings.generative_model_name})."
+        )
+
+        # Cross-encoder re-ranker (lazy-loaded on first use)
+        self._reranker = None
 
         logger.info(f"Using ChromaDB at '{self.chroma_dir}', collection '{self.collection_name}'.")
         self.vectorstore = Chroma(
@@ -144,14 +151,26 @@ class HybridRAGPipeline:
             logger.error(f"Error in keyword search: {e}")
             return []
 
+    def rerank(self, query: str, docs: List[Document]) -> List[Document]:
+        """Re-rank docs with a cross-encoder model. Lazy-loads on first call."""
+        if self._reranker is None:
+            from sentence_transformers import CrossEncoder
+            self._reranker = CrossEncoder(settings.reranker_model)
+            logger.info(f"Loaded cross-encoder reranker: {settings.reranker_model}")
+        pairs = [(query, doc.page_content) for doc in docs]
+        scores = self._reranker.predict(pairs)
+        return [doc for _, doc in sorted(zip(scores, docs), key=lambda x: x[0], reverse=True)]
+
     def hybrid_search(
         self,
         query: str,
         k: int = 10,
-        semantic_weight: float = 0.7,
+        semantic_weight: Optional[float] = None,
         filename_filter: Optional[str] = None,
     ) -> List[Document]:
         """Perform hybrid search, combining semantic and keyword results."""
+        if semantic_weight is None:
+            semantic_weight = settings.semantic_weight
         semantic_results = self.semantic_search(query, k=k, filename_filter=filename_filter)
         keyword_results = self.keyword_search(query, k=k)
 
@@ -220,6 +239,9 @@ class HybridRAGPipeline:
             ]
         else:  # 'hybrid'
             results = self.hybrid_search(query, k=k, filename_filter=filename_filter)
+
+        if results and settings.reranker_enabled:
+            results = self.rerank(query, results)
 
         if not results:
             summary = "No relevant information found in the local documents."

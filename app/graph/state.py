@@ -33,6 +33,7 @@ class AgentState(TypedDict, total=False):
     # QA                                                                   #
     # ------------------------------------------------------------------ #
     faithfulness_score: float         # 0.0–1.0; -1.0 = eval error
+    ragas_scores: Optional[Dict[str, float]]  # Full RAGAS metrics when enabled
     qa_passed: bool                   # True when QA gate cleared
     qa_feedback: str                  # Critique fed back to domain agent
     qa_retries: int                   # Number of QA retries so far

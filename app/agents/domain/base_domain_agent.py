@@ -10,6 +10,7 @@ from typing import Optional
 
 import google.generativeai as genai
 
+from config.settings import settings
 from graph.state import AgentState
 from src.retriever.retriever_rag import HybridRAGPipeline
 
@@ -122,12 +123,34 @@ class BaseDomainAgent(ABC):
     # Internal helpers
     # ------------------------------------------------------------------
 
+    def _compress_docs(self, query: str, docs: list) -> list:
+        """Filter docs below the compression similarity threshold."""
+        try:
+            from langchain.retrievers.document_compressors import EmbeddingsFilter
+            from langchain_core.documents import Document as LC_Document
+            lc_docs = [
+                LC_Document(page_content=d["content"], metadata=d.get("metadata", {}))
+                for d in docs if d.get("content")
+            ]
+            compressor = EmbeddingsFilter(
+                embeddings=self.pipeline.embedding_model,
+                similarity_threshold=settings.compression_similarity_threshold,
+            )
+            compressed = compressor.compress_documents(lc_docs, query)
+            return [{"content": d.page_content, "metadata": d.metadata} for d in compressed]
+        except Exception as e:
+            logger.warning(f"Context compression failed, using original docs: {e}")
+            return docs
+
     def _generate_response(
         self,
         query: str,
         docs: list,
         qa_feedback: Optional[str],
     ) -> str:
+        if settings.context_compression_enabled and docs:
+            docs = self._compress_docs(query, docs)
+
         context = "\n\n".join(
             d["content"] for d in docs if d.get("content")
         )

@@ -7,9 +7,9 @@ from typing import Dict, Any
 
 from langchain_chroma import Chroma
 from langchain_community.document_loaders import PyPDFLoader
-from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from config.settings import settings
+from src.ingestion.chunker_factory import get_chunker
 
 logger = logging.getLogger(__name__)
 
@@ -91,7 +91,7 @@ def ingest_document_from_base64(
         loader = PyPDFLoader(tmp_path)
         docs = loader.load()
 
-        text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+        text_splitter = get_chunker()
         chunks = text_splitter.split_documents(docs)
 
         # 6. Build metadata for each chunk
