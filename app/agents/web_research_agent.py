@@ -3,6 +3,7 @@ Web Research Agent — falls back to a configured web search provider when
 local documents are insufficient (orchestrator confidence < 0.6 or no
 local results).
 """
+import json
 import logging
 from datetime import datetime
 
@@ -18,6 +19,35 @@ async def web_research_node(state: AgentState) -> AgentState:
     query = state["query"]
     provider_name = settings.web_search_provider
     logger.info(f"WebResearchAgent: provider={provider_name}, query='{query[:80]}'")
+
+    # MCP path
+    if settings.mcp_enabled:
+        mcp_clients = state.get("mcp_clients") or {}
+        search_session = mcp_clients.get("search")
+        if search_session:
+            try:
+                from mcp_client.search_client import MCPSearchClient
+                client = MCPSearchClient(search_session)
+                result = await client.web_search(query)
+                if isinstance(result, str):
+                    result = json.loads(result)
+                summary = result.get("answer", "")
+                logger.info("WebResearchAgent: used MCP search path")
+                return {
+                    **state,
+                    "summary": summary,
+                    "retrieved_docs": [{"content": summary, "metadata": {"source": "MCP Web Search"}}],
+                    "source_files": ["MCP Web Search"],
+                    "search_type": "web",
+                    "metadata": {
+                        **(state.get("metadata") or {}),
+                        "search_type": "web_search",
+                        "web_search_provider": result.get("provider", provider_name),
+                        "timestamp": datetime.now().isoformat(),
+                    },
+                }
+            except Exception as exc:
+                logger.warning("MCP search failed, falling back to direct: %s", exc)
 
     provider = get_search_provider(settings)
 

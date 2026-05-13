@@ -1,13 +1,16 @@
 """
 POST /contracts/generate — dedicated contract generation endpoint.
+GET  /contracts          — list persisted contracts (MCP path only).
 """
+import json
 import logging
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from agents.contract_agent import ContractAgent
+from config.settings import settings
 
 logger = logging.getLogger(__name__)
 
@@ -36,10 +39,36 @@ class ContractResponse(BaseModel):
     message: str
 
 
-def get_contracts_router(rag_pipeline, verify_api_key):
+def get_contracts_router(rag_pipeline, verify_api_key, mcp_manager_fn=None):
     """
     Factory that creates the router with injected dependencies.
     """
+
+    @router.get(
+        "/contracts",
+        response_model=List[Dict[str, Any]],
+        dependencies=[Depends(verify_api_key)],
+    )
+    async def list_contracts(
+        contract_type: Optional[str] = None,
+        limit: int = 20,
+        offset: int = 0,
+    ):
+        mgr = mcp_manager_fn() if mcp_manager_fn else None
+        if not settings.mcp_enabled or mgr is None:
+            raise HTTPException(
+                status_code=501,
+                detail="Contract listing requires MCP_ENABLED=true.",
+            )
+        session = mgr.get("database")
+        if not session:
+            raise HTTPException(status_code=503, detail="Database MCP server unavailable.")
+        from mcp_client.database_client import MCPDatabaseClient
+        client = MCPDatabaseClient(session)
+        result = await client.query_contracts(contract_type, limit, offset)
+        if isinstance(result, str):
+            result = json.loads(result)
+        return result
 
     @router.post(
         "/contracts/generate",

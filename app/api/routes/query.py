@@ -43,7 +43,7 @@ class QueryResponse(BaseModel):
 # Endpoint                                                             #
 # ------------------------------------------------------------------ #
 
-def get_query_router(rag_pipeline, verify_api_key):
+def get_query_router(rag_pipeline, verify_api_key, mcp_manager_fn=None):
     """
     Factory that creates the router with injected dependencies.
     Called once from main.py after the pipeline is initialised.
@@ -74,11 +74,20 @@ def get_query_router(rag_pipeline, verify_api_key):
                 generative_model=rag_pipeline.generative_model,
             )
 
+            mcp_clients: dict = {}
+            mgr = mcp_manager_fn() if mcp_manager_fn else None
+            if mgr is not None:
+                for name in ("search", "filesystem", "database"):
+                    session = mgr.get(name)
+                    if session:
+                        mcp_clients[name] = session
+
             initial_state = {
                 "query": request.user_query,
                 "session_id": request.session_id,
                 "qa_retries": 0,
                 "metadata": {},
+                "mcp_clients": mcp_clients or None,
             }
 
             try:

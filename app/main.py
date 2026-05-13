@@ -1,6 +1,7 @@
 import logging
 import os
 import tempfile
+from contextlib import asynccontextmanager
 from typing import List, Dict, Any, Optional
 
 import uvicorn
@@ -31,6 +32,28 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 mlflow.set_experiment("Legal_RAG_Assistant")
 
+# --- MCP Client Manager (optional) ---
+_mcp_manager = None
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global _mcp_manager
+    if settings.mcp_enabled:
+        from mcp_client.client import MCPClientManager
+        _mcp_manager = MCPClientManager({
+            "search": settings.mcp_search_server_url,
+            "filesystem": settings.mcp_filesystem_server_url,
+            "database": settings.mcp_database_server_url,
+        })
+        await _mcp_manager.start()
+        logger.info("MCP client manager started.")
+    yield
+    if _mcp_manager:
+        await _mcp_manager.stop()
+        logger.info("MCP client manager stopped.")
+
+
 # --- FastAPI App ---
 app = FastAPI(
     title="Legal RAG API",
@@ -39,6 +62,7 @@ app = FastAPI(
         "and ingesting new ones."
     ),
     version="2.0.0",
+    lifespan=lifespan,
 )
 
 # --- API Key Auth ---
@@ -65,8 +89,13 @@ except Exception as e:
     rag_pipeline = None
 
 # --- Phase 2 Multi-Agent Routes ---
-app.include_router(get_query_router(rag_pipeline, verify_api_key))
-app.include_router(get_contracts_router(rag_pipeline, verify_api_key))
+# _mcp_manager is None at import time; routers read it via a closure so they
+# always see the live value set during the lifespan startup.
+def _get_mcp():
+    return _mcp_manager
+
+app.include_router(get_query_router(rag_pipeline, verify_api_key, _get_mcp))
+app.include_router(get_contracts_router(rag_pipeline, verify_api_key, _get_mcp))
 
 
 # --- Pydantic Models ---

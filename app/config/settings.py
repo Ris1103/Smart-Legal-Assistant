@@ -50,6 +50,12 @@ class Settings(BaseSettings):
     # --- Web Search ---
     web_search_provider: str = "perplexity"   # "perplexity" | "tavily" | "grok"
 
+    # --- MCP Integration ---
+    mcp_enabled: bool = False
+    mcp_search_server_url: str = "http://localhost:8003"
+    mcp_filesystem_server_url: str = "http://localhost:8001"
+    mcp_database_server_url: str = "http://localhost:8002"
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"

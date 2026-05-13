@@ -15,6 +15,8 @@ import re
 from datetime import datetime
 from typing import Optional
 
+from config.settings import settings
+
 import google.generativeai as genai
 from jinja2 import Environment, FileSystemLoader, TemplateNotFound
 
@@ -67,7 +69,7 @@ class ContractAgent:
             lstrip_blocks=True,
         )
 
-    def __call__(self, state: AgentState) -> AgentState:
+    async def __call__(self, state: AgentState) -> AgentState:
         query = state["query"]
         logger.info(f"ContractAgent processing: '{query[:80]}'")
 
@@ -88,6 +90,18 @@ class ContractAgent:
 
         params = self._extract_params(query, contract_type)
         contract_text = self._render_template(template_file, params)
+
+        # Optionally persist via MCP database server
+        if settings.mcp_enabled:
+            mcp_clients = state.get("mcp_clients") or {}
+            db_session = mcp_clients.get("database")
+            if db_session:
+                try:
+                    from mcp_client.database_client import MCPDatabaseClient
+                    db_client = MCPDatabaseClient(db_session)
+                    await db_client.save_contract(contract_type, params, contract_text)
+                except Exception as exc:
+                    logger.warning("MCP save_contract failed (non-fatal): %s", exc)
 
         return {
             **state,

@@ -46,6 +46,11 @@ class AgentState(TypedDict, total=False):
     contract_text: str                # Rendered contract
 
     # ------------------------------------------------------------------ #
+    # MCP                                                                  #
+    # ------------------------------------------------------------------ #
+    mcp_clients: Optional[Dict[str, Any]]   # injected at invocation time
+
+    # ------------------------------------------------------------------ #
     # Final response                                                       #
     # ------------------------------------------------------------------ #
     response: str                     # Assembled final response
