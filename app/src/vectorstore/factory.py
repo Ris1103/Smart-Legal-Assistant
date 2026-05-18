@@ -8,7 +8,7 @@ from src.vectorstore.base import BaseVectorStore
 
 logger = logging.getLogger(__name__)
 
-_PROVIDERS = ("chromadb", "mongodb_atlas", "pgvector", "pinecone")
+_PROVIDERS = ("chromadb", "mongodb_atlas", "pgvector", "pinecone", "elasticsearch")
 
 
 class VectorStoreFactory:
@@ -58,6 +58,10 @@ class VectorStoreFactory:
         if provider == "pinecone":
             from src.vectorstore.pinecone_store import PineconeVectorStore
             return PineconeVectorStore(embedding_model)
+
+        if provider == "elasticsearch":
+            from src.vectorstore.elastic_store import ElasticsearchVectorStore
+            return ElasticsearchVectorStore(embedding_model)
 
         raise ValueError(
             f"Unknown vector_store_provider '{provider}'. "

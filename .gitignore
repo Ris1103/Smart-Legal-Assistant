@@ -5,6 +5,8 @@ data/
 plans/
 chroma_db/
 .env
+app/.env.local
+app/.env.prod
 sample_results/
 __pycache__/
 mlartifacts/

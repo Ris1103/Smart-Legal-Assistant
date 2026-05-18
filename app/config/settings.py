@@ -52,7 +52,7 @@ class Settings(BaseSettings):
     web_search_provider: str = "perplexity"   # "perplexity" | "tavily" | "grok"
 
     # --- Vector Store ---
-    vector_store_provider: str = "chromadb"  # chromadb | mongodb_atlas | pgvector | pinecone
+    vector_store_provider: str = "chromadb"  # chromadb | mongodb_atlas | pgvector | pinecone | elasticsearch
 
     # MongoDB Atlas
     mongodb_atlas_uri: str = ""
@@ -61,10 +61,16 @@ class Settings(BaseSettings):
 
     # pgvector (Neon or any Postgres with pgvector extension)
     pgvector_dsn: str = ""  # postgres://user:pass@host/db
+    pgvector_collection_name: str = "legal_documents"
 
     # Pinecone
     pinecone_api_key: str = ""
     pinecone_index_name: str = "legal-advisor"
+
+    # Elasticsearch (local Docker or Elastic Cloud)
+    elasticsearch_url: str = "http://localhost:9200"
+    elasticsearch_api_key: str = ""           # empty = no auth (local Docker)
+    elasticsearch_index_name: str = "legal-advisor"
 
     # --- Auth (Clerk) ---
     clerk_secret_key: str = ""          # sk_test_... from Clerk dashboard

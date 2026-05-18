@@ -9,19 +9,18 @@ from src.vectorstore.base import BaseVectorStore
 
 logger = logging.getLogger(__name__)
 
-_COLLECTION = "legal_documents"
-
-
 class PgVectorStore(BaseVectorStore):
     def __init__(self, embedding_model: Embeddings):
         from langchain_postgres import PGVector
 
+        _collection = settings.pgvector_collection_name
         self._store = PGVector(
             embeddings=embedding_model,
-            collection_name=_COLLECTION,
+            collection_name=_collection,
             connection=settings.pgvector_dsn,
         )
-        logger.info(f"PgVectorStore: collection='{_COLLECTION}'")
+        self._collection = _collection
+        logger.info(f"PgVectorStore: collection='{_collection}'")
 
     def add_documents(self, docs: list[Document]) -> list[str]:
         return self._store.add_documents(docs)
@@ -51,4 +50,4 @@ class PgVectorStore(BaseVectorStore):
 
     @property
     def name(self) -> str:
-        return _COLLECTION
+        return self._collection
