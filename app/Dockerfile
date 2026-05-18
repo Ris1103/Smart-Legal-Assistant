@@ -1,0 +1,45 @@
+# ── Stage 1: dependency installer ──────────────────────────────────────────
+FROM python:3.12-slim AS builder
+
+WORKDIR /app
+
+# Install uv
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+
+# Copy dependency manifests first (layer cache)
+COPY pyproject.toml uv.lock ./
+
+# Install all production deps into /app/.venv; no cache to keep image lean
+RUN uv sync --frozen --no-dev --no-cache
+
+# ── Stage 2: runtime ────────────────────────────────────────────────────────
+FROM python:3.12-slim AS runtime
+
+# Non-root user for security
+RUN useradd --create-home --shell /bin/bash appuser
+
+WORKDIR /app
+
+# Copy venv from builder
+COPY --from=builder /app/.venv /app/.venv
+
+# Copy application source
+COPY . .
+
+# Create log directory and fix ownership
+RUN mkdir -p logs && chown -R appuser:appuser /app
+
+# Activate venv on PATH
+ENV PATH="/app/.venv/bin:$PATH" \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1
+
+USER appuser
+
+EXPOSE 8000
+
+# Health check — hits the /health endpoint
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+  CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"
+
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]

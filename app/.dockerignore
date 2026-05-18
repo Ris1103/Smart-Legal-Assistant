@@ -1,0 +1,14 @@
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+chroma_db/
+mlruns/
+mlartifacts/
+logs/
+.env
+.env.local
+.env.prod
+tests/
+.pytest_cache/
+*.egg-info/

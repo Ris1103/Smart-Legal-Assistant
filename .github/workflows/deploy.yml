@@ -1,0 +1,114 @@
+name: Build → Push GHCR → Deploy to GCP VM
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:   # allow manual trigger
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_API: ghcr.io/${{ github.repository_owner }}/legal-advisor-api
+  IMAGE_FRONTEND: ghcr.io/${{ github.repository_owner }}/legal-advisor-frontend
+
+jobs:
+  # ── Job 1: build and push both images ──────────────────────────────────────
+  build:
+    name: Build & Push
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write   # needed to push to GHCR
+
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set image tag
+        id: meta
+        run: echo "tag=${GITHUB_SHA::8}" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # ── API image ────────────────────────────────────────────────────────
+      - name: Build & push API image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./app
+          file: ./app/Dockerfile
+          push: true
+          tags: |
+            ${{ env.IMAGE_API }}:${{ steps.meta.outputs.tag }}
+            ${{ env.IMAGE_API }}:latest
+          cache-from: type=gha,scope=api
+          cache-to: type=gha,mode=max,scope=api
+
+      # ── Frontend image ───────────────────────────────────────────────────
+      - name: Build & push Frontend image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./frontend
+          file: ./frontend/Dockerfile
+          push: true
+          build-args: |
+            VITE_API_URL=${{ secrets.VITE_API_URL }}
+            VITE_CLERK_PUBLISHABLE_KEY=${{ secrets.VITE_CLERK_PUBLISHABLE_KEY }}
+            VITE_LOG_LEVEL=warn
+          tags: |
+            ${{ env.IMAGE_FRONTEND }}:${{ steps.meta.outputs.tag }}
+            ${{ env.IMAGE_FRONTEND }}:latest
+          cache-from: type=gha,scope=frontend
+          cache-to: type=gha,mode=max,scope=frontend
+
+  # ── Job 2: deploy to GCP VM via SSH ────────────────────────────────────────
+  deploy:
+    name: Deploy to GCP VM
+    runs-on: ubuntu-latest
+    needs: build
+    environment: production   # requires manual approval gate in GitHub
+
+    steps:
+      - name: Checkout (for docker-compose.yml)
+        uses: actions/checkout@v4
+
+      - name: Copy docker-compose.yml to VM
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.GCP_VM_HOST }}
+          username: ${{ secrets.GCP_VM_USER }}
+          key: ${{ secrets.GCP_SSH_PRIVATE_KEY }}
+          source: "docker-compose.yml"
+          target: "~/legal-advisor"
+
+      - name: Deploy on VM
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.GCP_VM_HOST }}
+          username: ${{ secrets.GCP_VM_USER }}
+          key: ${{ secrets.GCP_SSH_PRIVATE_KEY }}
+          script: |
+            set -e
+            cd ~/legal-advisor
+
+            # Authenticate Docker to GHCR using a PAT stored on the VM
+            echo "$GHCR_PAT" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+            # Set the pinned image tags for this deploy
+            export GHCR_IMAGE_API=${{ env.IMAGE_API }}:${{ needs.build.outputs.tag }}
+            export GHCR_IMAGE_FRONTEND=${{ env.IMAGE_FRONTEND }}:${{ needs.build.outputs.tag }}
+
+            docker compose pull
+            docker compose up -d --remove-orphans
+
+            # Prune dangling images to reclaim disk on the e2-micro
+            docker image prune -f

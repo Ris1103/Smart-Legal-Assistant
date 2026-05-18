@@ -1,0 +1,80 @@
+#cloud-config
+# Ubuntu 24.04 LTS — runs once on first boot.
+# Installs: Docker + Compose, Docker daemon log rotation,
+#            CloudWatch Agent (ships container logs + memory/disk metrics),
+#            certbot, 2 GB swap.
+
+packages:
+  - apt-transport-https
+  - ca-certificates
+  - curl
+  - gnupg
+  - certbot
+  - unzip
+
+runcmd:
+  # ── Docker ──────────────────────────────────────────────────────────────────
+  - install -m 0755 -d /etc/apt/keyrings
+  - curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+  - chmod a+r /etc/apt/keyrings/docker.gpg
+  - echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo $VERSION_CODENAME) stable" | tee /etc/apt/sources.list.d/docker.list
+  - apt-get update -qq
+  - apt-get install -y -qq docker-ce docker-ce-cli containerd.io docker-compose-plugin
+  - systemctl enable --now docker
+
+  # ── Docker daemon: global log rotation ──────────────────────────────────────
+  - |
+    cat > /etc/docker/daemon.json <<'EOF'
+    {
+      "log-driver": "json-file",
+      "log-opts": {
+        "max-size": "10m",
+        "max-file": "3"
+      }
+    }
+    EOF
+  - systemctl restart docker
+
+  # ── CloudWatch Agent ─────────────────────────────────────────────────────────
+  # Ships Docker container logs + memory/swap/disk metrics to CloudWatch.
+  # Requires the EC2 instance profile to have CloudWatchAgentServerPolicy.
+  - curl -sSO https://s3.amazonaws.com/amazoncloudwatch-agent/ubuntu/amd64/latest/amazon-cloudwatch-agent.deb
+  - dpkg -i amazon-cloudwatch-agent.deb
+  - |
+    cat > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json <<'EOF'
+    {
+      "logs": {
+        "logs_collected": {
+          "files": {
+            "collect_list": [
+              {
+                "file_path": "/var/lib/docker/containers/**/*-json.log",
+                "log_group_name": "/legal-advisor/docker",
+                "log_stream_name": "{instance_id}",
+                "auto_removal": true
+              }
+            ]
+          }
+        }
+      },
+      "metrics": {
+        "metrics_collected": {
+          "mem":  { "measurement": ["mem_used_percent"] },
+          "swap": { "measurement": ["swap_used_percent"] },
+          "disk": { "measurement": ["disk_used_percent"], "resources": ["/"] }
+        }
+      }
+    }
+    EOF
+  - /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -s -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json
+  - systemctl enable amazon-cloudwatch-agent
+
+  # ── App directory ────────────────────────────────────────────────────────────
+  - mkdir -p /root/legal-advisor/infra/certs
+
+  # ── Swap (t2.micro has 1 GB RAM — same as GCP e2-micro) ─────────────────────
+  - fallocate -l 2G /swapfile
+  - chmod 600 /swapfile
+  - mkswap /swapfile
+  - swapon /swapfile
+  - echo '/swapfile none swap sw 0 0' >> /etc/fstab

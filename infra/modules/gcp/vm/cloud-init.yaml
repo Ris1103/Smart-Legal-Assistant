@@ -1,0 +1,54 @@
+#cloud-config
+# Debian 12 — runs once on first boot.
+# Installs: Docker + Compose, Docker daemon log rotation,
+#            Google Cloud Ops Agent (ships container logs to Cloud Logging),
+#            certbot, 2 GB swap.
+
+packages:
+  - apt-transport-https
+  - ca-certificates
+  - curl
+  - gnupg
+  - certbot
+
+runcmd:
+  # ── Docker ──────────────────────────────────────────────────────────────────
+  - install -m 0755 -d /etc/apt/keyrings
+  - curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+  - chmod a+r /etc/apt/keyrings/docker.gpg
+  - echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/debian $(. /etc/os-release && echo $VERSION_CODENAME) stable" | tee /etc/apt/sources.list.d/docker.list
+  - apt-get update -qq
+  - apt-get install -y -qq docker-ce docker-ce-cli containerd.io docker-compose-plugin
+  - systemctl enable --now docker
+
+  # ── Docker daemon: global log rotation ──────────────────────────────────────
+  # Caps json-file logs for any container that doesn't set its own logging config.
+  - |
+    cat > /etc/docker/daemon.json <<'EOF'
+    {
+      "log-driver": "json-file",
+      "log-opts": {
+        "max-size": "10m",
+        "max-file": "3"
+      }
+    }
+    EOF
+  - systemctl restart docker
+
+  # ── Google Cloud Ops Agent ───────────────────────────────────────────────────
+  # Forwards container stdout/stderr (captured by Docker json-file) and OS metrics
+  # to Google Cloud Logging + Cloud Monitoring.
+  # Requires the VM service account to have roles/logging.logWriter.
+  - curl -sSO https://dl.google.com/cloudagents/add-google-cloud-ops-agent-repo.sh
+  - bash add-google-cloud-ops-agent-repo.sh --also-install
+  - systemctl enable --now google-cloud-ops-agent
+
+  # ── App directory ────────────────────────────────────────────────────────────
+  - mkdir -p /root/legal-advisor/infra/certs
+
+  # ── Swap (critical on 1 GB e2-micro with heavy Python deps) ─────────────────
+  - fallocate -l 2G /swapfile
+  - chmod 600 /swapfile
+  - mkswap /swapfile
+  - swapon /swapfile
+  - echo '/swapfile none swap sw 0 0' >> /etc/fstab

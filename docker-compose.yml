@@ -1,0 +1,73 @@
+# Production docker-compose — single GCP e2-micro VM (1 vCPU, 1 GB RAM + 2 GB swap)
+# Images are pulled from GHCR; app secrets live in ./app/.env.prod on the VM.
+#
+# Usage on the VM:
+#   docker compose pull && docker compose up -d
+#
+# Required env vars exported before running (set by the deploy workflow):
+#   GHCR_IMAGE_API      ghcr.io/<owner>/legal-advisor-api:<tag>
+#   GHCR_IMAGE_FRONTEND ghcr.io/<owner>/legal-advisor-frontend:<tag>
+
+services:
+
+  api:
+    image: ${GHCR_IMAGE_API:-ghcr.io/ris1103/legal-advisor-api:latest}
+    restart: unless-stopped
+    env_file: ./app/.env.prod
+    volumes:
+      - api_logs:/app/logs   # RotatingFileHandler output; inspect: docker compose exec api ls logs/
+    deploy:
+      resources:
+        limits:
+          memory: 896m         # leaves ~128 MB for OS on 1 GB VM; swap absorbs bursts
+          memswap_limit: 2560m # container may use up to 2560 MB total (memory + swap)
+        reservations:
+          memory: 512m
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      start_period: 60s
+      retries: 3
+    expose:
+      - "8000"
+    networks:
+      - internal
+
+  frontend:
+    image: ${GHCR_IMAGE_FRONTEND:-ghcr.io/ris1103/legal-advisor-frontend:latest}
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./infra/certs:/etc/nginx/certs:ro   # TLS certs managed by certbot on the VM
+    deploy:
+      resources:
+        limits:
+          memory: 96m
+        reservations:
+          memory: 32m
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "3"
+    depends_on:
+      api:
+        condition: service_healthy
+    networks:
+      - internal
+
+volumes:
+  api_logs:
+
+networks:
+  internal:
+    driver: bridge

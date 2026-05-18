@@ -16,3 +16,4 @@ mlruns/
 .claude/
 CLAUDE.md
 .secrets.baseline
+infra/certs/
