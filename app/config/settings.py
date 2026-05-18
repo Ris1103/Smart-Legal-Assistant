@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     # --- Models ---
     generative_model_name: str = "gemma-4-26b-a4b-it"
     embedding_provider: str = "google"   # "google" | "bge"
+    google_embedding_model_name: str = "models/gemini-embedding-001"
     bge_model_name: str = "BAAI/bge-m3"
     grok_model_name: str = "grok-3"
 
@@ -64,6 +65,19 @@ class Settings(BaseSettings):
     # Pinecone
     pinecone_api_key: str = ""
     pinecone_index_name: str = "legal-advisor"
+
+    # --- Auth (Clerk) ---
+    clerk_secret_key: str = ""          # sk_test_... from Clerk dashboard
+    clerk_publishable_key: str = ""     # pk_test_... (used by frontend)
+    clerk_webhook_secret: str = ""      # whsec_... for webhook verification
+
+    # --- Database (Neon PostgreSQL) ---
+    database_url: str = ""              # postgresql+asyncpg://user:pass@host/db
+    db_pool_min_size: int = 2
+    db_pool_max_size: int = 10
+
+    # --- Rate Limiting ---
+    rate_limit_per_minute: int = 10
 
     # --- MCP Integration ---
     mcp_enabled: bool = False

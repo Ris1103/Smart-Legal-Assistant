@@ -13,8 +13,13 @@ from fastapi import (
     Depends,
     Security,
 )
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security.api_key import APIKeyHeader
 from pydantic import BaseModel, Field
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
+from slowapi.util import get_remote_address
 
 from config.settings import settings
 from src.retriever.retriever_rag import HybridRAGPipeline
@@ -26,11 +31,17 @@ from src.evaluation.evaluation import (
 )
 from api.routes.query import get_query_router
 from api.routes.contracts import get_contracts_router
+from api.routes.users import router as users_router, conv_router
+from api.routes.webhooks import router as webhooks_router
+from db.database import init_pool, close_pool, _pool
+from db.migrations import run_migrations
 
 # --- Setup ---
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 mlflow.set_experiment("Legal_RAG_Assistant")
+
+limiter = Limiter(key_func=get_remote_address)
 
 # --- MCP Client Manager (optional) ---
 _mcp_manager = None
@@ -39,6 +50,11 @@ _mcp_manager = None
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _mcp_manager
+    # Database pool
+    await init_pool()
+    if _pool:
+        await run_migrations(_pool)
+    # MCP
     if settings.mcp_enabled:
         from mcp_client.client import MCPClientManager
         _mcp_manager = MCPClientManager({
@@ -52,6 +68,7 @@ async def lifespan(app: FastAPI):
     if _mcp_manager:
         await _mcp_manager.stop()
         logger.info("MCP client manager stopped.")
+    await close_pool()
 
 
 # --- FastAPI App ---
@@ -63,6 +80,18 @@ app = FastAPI(
     ),
     version="2.0.0",
     lifespan=lifespan,
+)
+
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_middleware(SlowAPIMiddleware)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000", "http://localhost:8501"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # --- API Key Auth ---
@@ -96,6 +125,14 @@ def _get_mcp():
 
 app.include_router(get_query_router(rag_pipeline, verify_api_key, _get_mcp))
 app.include_router(get_contracts_router(rag_pipeline, verify_api_key, _get_mcp))
+app.include_router(users_router)
+app.include_router(conv_router)
+app.include_router(webhooks_router)
+
+
+@app.get("/health", tags=["ops"])
+async def health():
+    return {"status": "ok", "version": app.version}
 
 
 # --- Pydantic Models ---

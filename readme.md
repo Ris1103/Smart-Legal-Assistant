@@ -7,47 +7,48 @@ An intelligent legal advisory system for Indian small and medium businesses. Ans
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                        Streamlit UI  :8501                      │
-└────────────────────────────┬────────────────────────────────────┘
-                             │
-┌────────────────────────────▼────────────────────────────────────┐
-│                    FastAPI App  :8000                           │
-│                                                                 │
-│  POST /query          POST /contracts/generate   GET /contracts │
-│  POST /ingest         POST /retrieve (legacy)    POST /refresh  │
-│                                                                 │
-│  ┌─────────────────────────────────────────────────────────┐   │
-│  │              LangGraph Multi-Agent Pipeline             │   │
-│  │                                                         │   │
-│  │  [orchestrator] ──► domain + confidence + intent        │   │
-│  │       │                                                  │   │
-│  │       ├─ confidence < 0.6 ──► [web_research] ──► END    │   │
-│  │       ├─ intent=contract  ──► [contract]     ──► END    │   │
-│  │       └─ otherwise        ──► [domain_agent] ──► [qa]   │   │
-│  │                                    ▲               │    │   │
-│  │                                    └── retry ◄─────┘    │   │
-│  └─────────────────────────────────────────────────────────┘   │
-│                                                                 │
-│  MCPClientManager (when MCP_ENABLED=true)                       │
-│    search session ──► :8003   filesystem session ──► :8001      │
-│    database session ──► :8002                                   │
-└─────────────────────────────────────────────────────────────────┘
-                  │                    │                 │
-     ┌────────────▼──┐   ┌─────────────▼──┐   ┌─────────▼──────┐
-     │  Search MCP   │   │ Filesystem MCP │   │  Database MCP  │
-     │    :8003      │   │    :8001       │   │    :8002       │
-     │               │   │                │   │                │
-     │  web_search   │   │ upload_document │   │ save_contract  │
-     │               │   │ list_documents  │   │ query_contracts│
-     │  Perplexity / │   │ delete_document │   │ get_contract   │
-     │  Tavily / Grok│   │ get_metadata    │   │ get_template   │
-     └───────────────┘   └────────────────┘   └────────────────┘
-                                │                      │
-                    ┌───────────▼──────┐    ┌──────────▼──────┐
-                    │  ChromaDB        │    │  SQLite          │
-                    │  (chroma_db/)    │    │  contracts.db    │
-                    └──────────────────┘    └─────────────────-┘
+┌──────────────────────────────────────────────────────────────────┐
+│                    React UI  :3000  (Vite + Tailwind + Clerk)    │
+│   Chat  ·  Document Upload  ·  Contract Generator               │
+└────────────────────────┬─────────────────────────────────────────┘
+                         │  Bearer JWT (Clerk)
+┌────────────────────────▼─────────────────────────────────────────┐
+│                    FastAPI App  :8000                            │
+│                                                                  │
+│  POST /query          POST /contracts/generate   GET /health     │
+│  POST /ingest         POST /retrieve (legacy)    GET /users/me   │
+│  POST /refresh-index  GET/POST /conversations    POST /webhooks  │
+│                                                                  │
+│  ┌──────────────────────────────────────────────────────────┐   │
+│  │             LangGraph Multi-Agent Pipeline               │   │
+│  │                                                          │   │
+│  │  [orchestrator] ──► domain + confidence + intent         │   │
+│  │       │                                                   │   │
+│  │       ├─ confidence < 0.6 ──► [web_research] ──► END     │   │
+│  │       ├─ intent=contract  ──► [contract]     ──► END     │   │
+│  │       └─ otherwise        ──► [domain_agent] ──► [qa]    │   │
+│  │                                    ▲               │     │   │
+│  │                                    └── retry ◄─────┘     │   │
+│  └──────────────────────────────────────────────────────────┘   │
+│                                                                  │
+│  asyncpg Pool ──► Neon PostgreSQL (users, conversations,         │
+│                                    api_keys, contracts)          │
+│  slowapi rate limiting  ·  CORS middleware  ·  Clerk JWT auth    │
+└──────────────────────────────────────────────────────────────────┘
+         │                    │                 │
+┌────────▼──────┐  ┌──────────▼──────┐  ┌──────▼──────────┐
+│  Search MCP   │  │ Filesystem MCP  │  │  Database MCP   │
+│    :8003      │  │    :8001        │  │    :8002        │
+│  web_search   │  │ upload_document │  │ save_contract   │
+│  Tavily/Grok  │  │ list_documents  │  │ query_contracts │
+└───────────────┘  └─────────────────┘  └─────────────────┘
+         │
+┌────────▼──────────────┐
+│  Vector Store         │
+│  ChromaDB (local dev) │
+│  MongoDB Atlas (cloud)│
+│  pgvector / Pinecone  │
+└───────────────────────┘
 ```
 
 ---
@@ -55,17 +56,17 @@ An intelligent legal advisory system for Indian small and medium businesses. Ans
 ## What's Been Built
 
 ### Phase 0 — Basic RAG Pipeline
-Single FastAPI backend with ChromaDB vector store, Google `text-embedding-004` embeddings, and `gemma-3-27b-it` for generation. Supported PDF ingestion and a `/retrieve` endpoint.
+Single FastAPI backend with ChromaDB vector store, Google embeddings, and Gemma for generation.
 
 ### Phase 1 — Fix & Stabilize
 - Pydantic `BaseSettings` for config (single `.env` source)
 - SHA-256 duplicate detection on ingest; file size validation
 - Hybrid retrieval: semantic (ChromaDB) + keyword (TF-IDF), configurable weight
-- LLM relevance check; Perplexity web search fallback via async `httpx`
+- LLM relevance check; pluggable web search fallback (Perplexity / Tavily / Grok)
 - Faithfulness scoring with `-1.0` sentinel for eval errors
 - API key auth (`X-API-Key` header; disabled when key is empty)
-- MLflow tracing on every `/retrieve` call (artifacts + metrics → `app/mlruns/`)
-- Test suite: 29 tests across `test_agent.py`, `test_ingestion.py`, `test_evaluation.py`, `test_api.py`
+- MLflow tracing on every `/retrieve` call
+- Test suite: 29 tests across agent, ingestion, evaluation, API
 
 ### Phase 2 — Multi-Agent Architecture (LangGraph)
 Stateful multi-agent pipeline on `POST /query`:
@@ -73,38 +74,57 @@ Stateful multi-agent pipeline on `POST /query`:
 | Agent | Role |
 |-------|------|
 | **Orchestrator** | Classifies query into domain, confidence score, and intent (query/contract) |
-| **6 Domain Specialists** | GST, Income Tax, Company Law, Labour Law, Criminal Law, General — each with a dedicated ChromaDB collection and system prompt |
-| **QA Agent** | Faithfulness + disclaimer + completeness gate; feeds critique back for up to 2 retries |
-| **Contract Agent** | Extracts params from natural language; renders Jinja2 templates (NDA, service agreement, employment agreement) |
-| **Web Research Agent** | Provider-agnostic web search fallback for low-confidence or out-of-KB queries |
+| **6 Domain Specialists** | GST, Income Tax, Company Law, Labour Law, Criminal Law, General |
+| **QA Agent** | Faithfulness + disclaimer gate; up to 2 retries |
+| **Contract Agent** | Renders Jinja2 templates (NDA, service agreement, employment agreement) |
+| **Web Research Agent** | Provider-agnostic fallback (Tavily / Grok / Perplexity) |
 
-Pre-Phase 3 RAG enhancements: BGE-M3 embedding option, cross-encoder reranking, context compression, RAGAS evaluation, multi-provider search (Perplexity / Tavily / Grok).
-
-### Phase 3 — MCP Integration ✅ COMPLETE
-Three standalone MCP servers (SSE/HTTP transport) wrap the main access patterns. The main app connects to them via `MCPClientManager` at startup when `MCP_ENABLED=true`. All existing paths remain fully functional with `MCP_ENABLED=false` (the default).
+### Phase 3 — MCP Integration
+Three standalone MCP servers (SSE/HTTP). Active when `MCP_ENABLED=true`.
 
 | Server | Port | Tools |
 |--------|------|-------|
-| `mcp_servers/search_server/` | 8003 | `web_search(query, num_results, provider)` |
+| `mcp_servers/search_server/` | 8003 | `web_search` |
 | `mcp_servers/filesystem_server/` | 8001 | `upload_document`, `list_documents`, `delete_document`, `get_metadata` |
 | `mcp_servers/database_server/` | 8002 | `save_contract`, `query_contracts`, `get_contract`, `get_template` |
 
-Contract storage uses SQLite (`contracts.db`) — clean migration path to PostgreSQL in Phase 4.
+### Phase 4 — Production Scale (In Progress)
 
----
+#### 4.1 Vector Store Abstraction
+Provider-agnostic `BaseVectorStore` interface with Strategy + Factory + Singleton pattern.
 
-## What's Next
+| Provider | Use Case |
+|----------|----------|
+| `chromadb` | Local dev default |
+| `mongodb_atlas` | Cloud default (M0 free forever) |
+| `pgvector` | Neon / Supabase PostgreSQL |
+| `pinecone` | Free tier (100k vectors) |
 
-### Phase 4 — AWS Deployment
-Deploy on AWS Free Tier with a migration path to production scale:
+Switch via `VECTOR_STORE_PROVIDER` env var — zero code changes.
 
-- **Compute** — EC2 t2.micro + Docker Compose + Nginx reverse proxy + Let's Encrypt TLS
-- **Data** — RDS db.t3.micro PostgreSQL (replacing SQLite), S3 (documents + MLflow artifacts), ChromaDB on EBS backed up to S3
-- **Session cache** — `cachetools.TTLCache` in-process (ElastiCache is not free tier)
-- **Observability** — CloudWatch logs + custom metrics, MLflow on RDS+S3 backend, X-Ray tracing
-- **CI/CD** — GitHub Actions → ECR → EC2 Docker Compose (staging) → manual approval → prod
-- **IaC** — AWS CDK (Python) in `infra/stacks/` covering network, database, storage, API gateway, and monitoring
-- **Migration path** — EC2 Docker Compose → ECS Fargate when free tier expires
+#### 4.2 Auth + PostgreSQL (Clerk + Neon)
+- Clerk JWT verification on all API endpoints (`require_user` dependency)
+- Dev mode: auth bypassed when `CLERK_SECRET_KEY` is empty
+- asyncpg connection pool → Neon free-tier PostgreSQL
+- Tables: `users`, `conversations`, `api_keys`, `contracts`
+- Conversation history endpoints: `GET/POST /conversations`, `GET /conversations/{id}`
+- Clerk webhook upserts users on sign-up (`POST /webhooks/clerk`)
+- `slowapi` rate limiting (10 req/min per IP, configurable)
+- CORS configured for `:3000` (React) and `:8501` (Streamlit)
+
+#### 4.3 React Frontend (Current)
+- **React 18 + TypeScript + Vite** at `frontend/`
+- **Tailwind CSS** — responsive, mobile-first
+- **Clerk React SDK** — sign-in UI, Google SSO, JWT auto-attach
+- **TanStack Query** — async data fetching
+- **React Router v6** — SPA routing
+
+| Page | Path | Description |
+|------|------|-------------|
+| Login | `/login` | Clerk `<SignIn />` — email + Google SSO |
+| Chat | `/` | Chat UI connected to `POST /query` |
+| Documents | `/documents` | Drag-and-drop PDF upload → `POST /ingest` |
+| Contracts | `/contracts` | Contract generator → `POST /contracts/generate` |
 
 ---
 
@@ -121,30 +141,39 @@ Legal Advisor/
 │   │   └── web_research_agent.py
 │   ├── api/routes/
 │   │   ├── query.py             # POST /query
-│   │   └── contracts.py         # POST /contracts/generate, GET /contracts
+│   │   ├── contracts.py         # POST /contracts/generate
+│   │   ├── users.py             # GET /users/me, /conversations/*
+│   │   └── webhooks.py          # POST /webhooks/clerk
+│   ├── auth/clerk.py            # JWT verification dependency
 │   ├── config/settings.py       # Pydantic BaseSettings
+│   ├── db/
+│   │   ├── database.py          # asyncpg pool
+│   │   └── migrations.py        # idempotent DDL
 │   ├── graph/
-│   │   ├── graph_builder.py     # StateGraph assembly
-│   │   └── state.py             # AgentState TypedDict
-│   ├── mcp_client/              # SSE client wrappers
-│   │   ├── client.py            # MCPClientManager
-│   │   ├── search_client.py
-│   │   ├── filesystem_client.py
-│   │   └── database_client.py
+│   │   ├── graph_builder.py
+│   │   └── state.py
 │   ├── src/
-│   │   ├── ingestion/           # PDF ingestion + chunking
+│   │   ├── ingestion/
 │   │   ├── retriever/           # HybridRAGPipeline
-│   │   ├── search/              # search_providers.py (Perplexity/Tavily/Grok)
-│   │   └── evaluation/          # faithfulness + RAGAS
+│   │   ├── search/              # Perplexity / Tavily / Grok
+│   │   ├── vectorstore/         # BaseVectorStore + 4 providers
+│   │   └── evaluation/
 │   ├── templates/contracts/     # nda.j2, service_agreement.j2, employment_agreement.j2
 │   ├── tests/                   # 29 tests (pytest)
-│   ├── main.py                  # FastAPI app + lifespan
+│   ├── main.py
 │   └── requirements.txt
+├── frontend/                    # React 18 + Vite + Tailwind
+│   ├── src/
+│   │   ├── components/          # Layout, Chat, MessageBubble, DocumentUpload, ContractViewer
+│   │   ├── hooks/               # useChat, useDocuments
+│   │   ├── lib/                 # api.ts (axios), utils.ts
+│   │   └── pages/               # LoginPage, DashboardPage, DocumentsPage, ContractsPage
+│   ├── .env                     # VITE_CLERK_PUBLISHABLE_KEY, VITE_API_URL
+│   └── package.json
 ├── mcp_servers/
-│   ├── shared/__init__.py       # sys.path helper
-│   ├── search_server/           # FastMCP SSE server :8003
-│   ├── filesystem_server/       # FastMCP SSE server :8001
-│   └── database_server/         # FastMCP SSE server :8002
+│   ├── search_server/           # :8003
+│   ├── filesystem_server/       # :8001
+│   └── database_server/         # :8002
 └── README.md
 ```
 
@@ -154,30 +183,28 @@ Legal Advisor/
 
 ### Prerequisites
 - Python 3.12
+- Node.js 20+
 
-### 1. Clone and create venv
+### 1. Clone and create Python venv
 
 ```bash
 git clone <your-repository-url>
 cd "Legal Advisor"
 
-# Windows
 python -m venv app/.venv
+# Windows
 app\.venv\Scripts\activate
-
 # macOS / Linux
-python3 -m venv app/.venv
 source app/.venv/bin/activate
 ```
 
-### 2. Install dependencies
+### 2. Install Python dependencies
 
 ```bash
-cd app
-pip install -r requirements.txt
+cd app && pip install -r requirements.txt
 ```
 
-### 3. Configure environment variables
+### 3. Configure backend environment
 
 ```bash
 cp app/.env-example app/.env
@@ -187,35 +214,52 @@ Minimum required in `app/.env`:
 
 ```env
 GOOGLE_API_KEY=your_google_api_key_here
-PERPLEXITY_API_KEY=your_perplexity_api_key_here
-SERVICE_API_KEY=          # leave empty to disable auth in dev
+TAVILY_API_KEY=your_tavily_api_key_here
+WEB_SEARCH_PROVIDER=tavily
+
+# Auth (Clerk) — leave empty to disable auth in dev
+CLERK_SECRET_KEY=
+CLERK_PUBLISHABLE_KEY=
+
+# Database (Neon) — leave empty to disable DB features in dev
+DATABASE_URL=
 ```
 
-To enable MCP servers (Phase 3):
-
-```env
-MCP_ENABLED=true
-MCP_SEARCH_SERVER_URL=http://localhost:8003
-MCP_FILESYSTEM_SERVER_URL=http://localhost:8001
-MCP_DATABASE_SERVER_URL=http://localhost:8002
-```
-
-### 4. Run
-
-**Main app (two terminals, `cd app` with venv active):**
+### 4. Install frontend dependencies
 
 ```bash
-# Terminal 1 — backend
-uvicorn main:app --reload
-# API → http://localhost:8000  |  Swagger → http://localhost:8000/docs
+cd frontend
+npm install --cache D:\path\to\.npm-cache   # keeps cache off C drive
+```
 
-# Terminal 2 — frontend
-streamlit run streamlit_app.py
+Configure `frontend/.env`:
+
+```env
+VITE_CLERK_PUBLISHABLE_KEY=pk_test_...
+VITE_API_URL=http://localhost:8000
+```
+
+### 5. Run
+
+**Backend (Terminal 1):**
+```bash
+cd app && uvicorn main:app --reload
+# API → http://localhost:8000  |  Swagger → http://localhost:8000/docs
+```
+
+**React frontend (Terminal 2):**
+```bash
+cd frontend && npm run dev
+# UI → http://localhost:3000
+```
+
+**Legacy Streamlit UI (optional):**
+```bash
+cd app && streamlit run streamlit_app.py
 # UI → http://localhost:8501
 ```
 
-**MCP servers (optional, Phase 3 — each in its own terminal):**
-
+**MCP servers (optional, Phase 3):**
 ```bash
 python mcp_servers/search_server/server.py      # :8003
 python mcp_servers/filesystem_server/server.py  # :8001
@@ -240,31 +284,24 @@ curl -X POST http://localhost:8000/contracts/generate \
   -d '{"user_query": "Draft an NDA between Acme Corp and John Doe for a software project"}'
 ```
 
-### GET /contracts *(requires MCP_ENABLED=true)*
-```bash
-curl http://localhost:8000/contracts?limit=10
-```
-
 ### POST /ingest
 ```bash
 curl -X POST http://localhost:8000/ingest \
   -H "Content-Type: application/json" \
-  -d '{
-    "base64_text": "<base64-encoded-pdf>",
-    "file_type": ".pdf",
-    "filename": "gst_act_2017.pdf",
-    "metadata": {}
-  }'
+  -d '{"base64_text": "<base64-pdf>", "file_type": ".pdf", "filename": "gst_act.pdf", "metadata": {}}'
 ```
 
-### POST /retrieve *(legacy)*
+### GET /health
 ```bash
-curl -X POST http://localhost:8000/retrieve \
-  -H "Content-Type: application/json" \
-  -d '{"user_query": "What are the penalties under the Income Tax Act?"}'
+curl http://localhost:8000/health
 ```
 
-> Add `-H "X-API-Key: your_key"` to any request when `SERVICE_API_KEY` is set.
+### GET /users/me *(requires Clerk JWT)*
+```bash
+curl http://localhost:8000/users/me -H "Authorization: Bearer <token>"
+```
+
+> Add `-H "X-API-Key: your_key"` when `SERVICE_API_KEY` is set.
 
 ---
 
@@ -273,3 +310,13 @@ curl -X POST http://localhost:8000/retrieve \
 ```bash
 cd app && pytest tests/ -v   # 29 passing
 ```
+
+---
+
+## What's Next
+
+### Phase 4 (Remaining) — Docker + CI/CD + GCP
+- **Docker** — multi-stage `Dockerfile` for FastAPI + React; `docker-compose.yml` for all services
+- **CI/CD** — GitHub Actions: build → push GHCR → SSH deploy
+- **GCP** — e2-micro (free forever) + MongoDB Atlas M0 + Neon PostgreSQL
+- **Terraform + Terragrunt** — `infra/` modules for GCP and AWS

@@ -53,8 +53,9 @@ class TestIsContextRelevant:
 class TestSearchPerplexity:
     @pytest.mark.asyncio
     async def test_returns_fallback_when_no_api_key(self):
-        with patch("src.agent.settings") as mock_settings:
-            mock_settings.perplexity_api_key = ""
+        mock_provider = AsyncMock()
+        mock_provider.search.side_effect = ValueError("TAVILY_API_KEY is not set.")
+        with patch("src.agent.get_search_provider", return_value=mock_provider):
             result = await search_perplexity("What is Section 80C?")
         assert result["query"] == "What is Section 80C?"
         assert "not configured" in result["summary"]
@@ -62,24 +63,11 @@ class TestSearchPerplexity:
 
     @pytest.mark.asyncio
     async def test_successful_web_search(self):
-        mock_response = MagicMock()
-        mock_response.json.return_value = {
-            "choices": [{"message": {"content": "Section 80C allows deductions."}}]
-        }
-        mock_response.raise_for_status = MagicMock()
-
+        mock_provider = AsyncMock()
+        mock_provider.search.return_value = "Section 80C allows deductions."
         with patch("src.agent.settings") as mock_settings:
-            mock_settings.perplexity_api_key = "test-key"
-            mock_settings.perplexity_model_name = "llama-3-sonar-large-32k-online"
-            with patch("src.agent.httpx.AsyncClient") as mock_client_cls:
-                mock_client = AsyncMock()
-                mock_client.post = AsyncMock(return_value=mock_response)
-                mock_client_cls.return_value.__aenter__ = AsyncMock(
-                    return_value=mock_client
-                )
-                mock_client_cls.return_value.__aexit__ = AsyncMock(
-                    return_value=False
-                )
+            mock_settings.web_search_provider = "tavily"
+            with patch("src.agent.get_search_provider", return_value=mock_provider):
                 result = await search_perplexity("What is Section 80C?")
 
         assert "Section 80C" in result["summary"]
