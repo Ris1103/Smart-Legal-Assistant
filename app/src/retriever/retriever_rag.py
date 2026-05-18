@@ -1,18 +1,15 @@
-import pathlib
 import json
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 
 from dotenv import load_dotenv
 
-# --- LangChain and Google Imports ---
-from langchain_chroma import Chroma
 from langchain_core.documents import Document
 import google.generativeai as genai
 
 from src.retriever.embedder_factory import get_embedder
+from src.vectorstore.base import BaseVectorStore
 
-# --- Standard Library Imports ---
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 import numpy as np
@@ -21,38 +18,23 @@ import mlflow
 
 from config.settings import settings
 
-# Load environment variables from .env file (fallback for local dev)
 load_dotenv()
 
-# Setup logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
 class HybridRAGPipeline:
-    def __init__(
-        self,
-        chroma_dir: Optional[str] = None,
-        collection_name: Optional[str] = None,
-    ):
+    def __init__(self, vectorstore: Optional[BaseVectorStore] = None):
         """
-        Initialize the RAG pipeline with Google AI and hybrid search capabilities.
+        Initialize the RAG pipeline.
 
         Args:
-            chroma_dir: Absolute path to ChromaDB persistence directory.
-                        Defaults to settings.chroma_db_path.
-            collection_name: ChromaDB collection to use.
-                             Defaults to settings.chroma_collection_name.
+            vectorstore: Provider-agnostic vector store. If None, the factory
+                         creates one from settings.vector_store_provider.
         """
-        # Resolve to an absolute path so the DB is always found regardless of
-        # the working directory from which the app is started.
-        raw_dir = chroma_dir or settings.chroma_db_path
-        self.chroma_dir = str(pathlib.Path(raw_dir).resolve())
-        self.collection_name = collection_name or settings.chroma_collection_name
-
         try:
             genai.configure(api_key=settings.google_api_key)
-            logger.info("Google GenAI client configured successfully.")
         except Exception as e:
             logger.error(f"Failed to configure Google GenAI: {e}")
             raise
@@ -64,37 +46,32 @@ class HybridRAGPipeline:
             f"generative model ({settings.generative_model_name})."
         )
 
-        # Cross-encoder re-ranker (lazy-loaded on first use)
         self._reranker = None
 
-        logger.info(f"Using ChromaDB at '{self.chroma_dir}', collection '{self.collection_name}'.")
-        self.vectorstore = Chroma(
-            persist_directory=self.chroma_dir,
-            embedding_function=self.embedding_model,
-            collection_name=self.collection_name,
-        )
+        if vectorstore is None:
+            from src.vectorstore.factory import VectorStoreFactory
+            vectorstore = VectorStoreFactory.get_instance(
+                embedding_model=self.embedding_model
+            )
+        self.vectorstore = vectorstore
+        logger.info(f"Using vector store: {type(vectorstore).__name__} ('{vectorstore.name}')")
 
         self.tfidf_vectorizer = TfidfVectorizer(
             max_features=10000, stop_words="english", ngram_range=(1, 2)
         )
-        # Prepare the corpus once on startup
         self.refresh_tfidf_corpus()
 
     def refresh_tfidf_corpus(self):
-        """
-        Refreshes the in-memory TF-IDF corpus from all documents in ChromaDB.
-        Call this after new documents are ingested.
-        """
-        logger.info("Refreshing TF-IDF corpus from ChromaDB...")
+        logger.info("Refreshing TF-IDF corpus from vector store...")
         try:
-            all_docs = self.vectorstore.get(include=["metadatas", "documents"])
+            all_docs = self.vectorstore.get_all()
             self.documents = all_docs.get("documents", [])
             self.metadatas = all_docs.get("metadatas", [])
             if self.documents:
                 self.tfidf_matrix = self.tfidf_vectorizer.fit_transform(self.documents)
                 logger.info(f"TF-IDF corpus refreshed with {len(self.documents)} documents.")
             else:
-                logger.warning("No documents found in ChromaDB during refresh.")
+                logger.warning("No documents found in vector store during refresh.")
                 self.documents, self.metadatas, self.tfidf_matrix = [], [], None
         except Exception as e:
             logger.error(f"Error refreshing TF-IDF corpus: {e}")
@@ -103,13 +80,10 @@ class HybridRAGPipeline:
     def semantic_search_with_scores(
         self, query: str, k: int = 5, filename_filter: Optional[str] = None
     ) -> list[tuple[Document, float]]:
-        """
-        Perform semantic search with relevance scores, optionally filtering by filename.
-        """
         try:
             where_filter = {"filename": filename_filter} if filename_filter else None
-            results = self.vectorstore.similarity_search_with_relevance_scores(
-                query, k=k, where=where_filter
+            results = self.vectorstore.similarity_search_with_scores(
+                query, k=k, filter=where_filter
             )
             logger.info(f"Semantic search with scores returned {len(results)} results.")
             return results
@@ -120,10 +94,9 @@ class HybridRAGPipeline:
     def semantic_search(
         self, query: str, k: int = 5, filename_filter: Optional[str] = None
     ) -> List[Document]:
-        """Perform semantic search using ChromaDB, optionally filtering by filename."""
         try:
             where_filter = {"filename": filename_filter} if filename_filter else None
-            results = self.vectorstore.similarity_search(query, k=k, where=where_filter)
+            results = self.vectorstore.similarity_search(query, k=k, filter=where_filter)
             logger.info(f"Semantic search returned {len(results)} results.")
             return results
         except Exception as e:
@@ -131,7 +104,6 @@ class HybridRAGPipeline:
             return []
 
     def keyword_search(self, query: str, k: int = 5) -> List[Dict[str, Any]]:
-        """Perform keyword search using TF-IDF."""
         if not self.documents or self.tfidf_matrix is None:
             return []
         try:
@@ -152,7 +124,6 @@ class HybridRAGPipeline:
             return []
 
     def rerank(self, query: str, docs: List[Document]) -> List[Document]:
-        """Re-rank docs with a cross-encoder model. Lazy-loads on first call."""
         if self._reranker is None:
             from sentence_transformers import CrossEncoder
             self._reranker = CrossEncoder(settings.reranker_model)
@@ -168,13 +139,11 @@ class HybridRAGPipeline:
         semantic_weight: Optional[float] = None,
         filename_filter: Optional[str] = None,
     ) -> List[Document]:
-        """Perform hybrid search, combining semantic and keyword results."""
         if semantic_weight is None:
             semantic_weight = settings.semantic_weight
         semantic_results = self.semantic_search(query, k=k, filename_filter=filename_filter)
         keyword_results = self.keyword_search(query, k=k)
 
-        # Post-filter keyword results if a filter is applied
         if filename_filter:
             keyword_results = [
                 res
@@ -214,9 +183,6 @@ class HybridRAGPipeline:
         page: int = 1,
         page_size: int = 5,
     ) -> Dict[str, Any]:
-        """
-        Process a query and return summarized results with pagination support.
-        """
         logger.info(
             f"Processing query: '{query}' with {search_type} search. "
             f"Filter: {filename_filter}, page={page}, page_size={page_size}"
@@ -237,7 +203,7 @@ class HybridRAGPipeline:
                 Document(page_content=r["content"], metadata=r["metadata"])
                 for r in keyword_results
             ]
-        else:  # 'hybrid'
+        else:
             results = self.hybrid_search(query, k=k, filename_filter=filename_filter)
 
         if results and settings.reranker_enabled:
@@ -253,7 +219,6 @@ class HybridRAGPipeline:
             doc.metadata.get("filename") for doc in results if doc.metadata.get("filename")
         }
 
-        # Apply pagination to the results list
         total_results = len(results)
         start = (page - 1) * page_size
         end = start + page_size
@@ -278,9 +243,6 @@ class HybridRAGPipeline:
 
     @mlflow.trace(name="gemma_summarizer")
     def summarize_with_gemma(self, context: str) -> str:
-        """
-        Summarize the retrieved context using the Gemma model.
-        """
         logger.info("Generating summary with Gemma...")
         system_prompt = (
             "You are an expert legal assistant. Your task is to provide a clear, "

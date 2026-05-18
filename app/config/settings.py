@@ -50,6 +50,21 @@ class Settings(BaseSettings):
     # --- Web Search ---
     web_search_provider: str = "perplexity"   # "perplexity" | "tavily" | "grok"
 
+    # --- Vector Store ---
+    vector_store_provider: str = "chromadb"  # chromadb | mongodb_atlas | pgvector | pinecone
+
+    # MongoDB Atlas
+    mongodb_atlas_uri: str = ""
+    mongodb_atlas_db: str = "legal_advisor"
+    mongodb_atlas_collection: str = "legal_documents"
+
+    # pgvector (Neon or any Postgres with pgvector extension)
+    pgvector_dsn: str = ""  # postgres://user:pass@host/db
+
+    # Pinecone
+    pinecone_api_key: str = ""
+    pinecone_index_name: str = "legal-advisor"
+
     # --- MCP Integration ---
     mcp_enabled: bool = False
     mcp_search_server_url: str = "http://localhost:8003"

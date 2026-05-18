@@ -79,7 +79,7 @@ class TestDuplicateDetection:
         b64, file_hash = self._make_tiny_pdf_b64()
         mock_vs = MagicMock()
         # Simulate ChromaDB finding the hash already stored.
-        mock_vs.get.return_value = {"ids": ["existing-id-1"]}
+        mock_vs.get_by_metadata.return_value = {"ids": ["existing-id-1"]}
 
         with patch("src.ingestion.ingestion_src.settings") as mock_settings:
             mock_settings.max_file_size_mb = 50
@@ -98,7 +98,7 @@ class TestDuplicateDetection:
         b64, _ = self._make_tiny_pdf_b64()
         mock_vs = MagicMock()
         # No existing document found.
-        mock_vs.get.return_value = {"ids": []}
+        mock_vs.get_by_metadata.return_value = {"ids": []}
 
         with patch("src.ingestion.ingestion_src.settings") as mock_settings:
             mock_settings.max_file_size_mb = 50

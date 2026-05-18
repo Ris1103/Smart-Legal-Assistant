@@ -5,11 +5,11 @@ import tempfile
 import logging
 from typing import Dict, Any
 
-from langchain_chroma import Chroma
 from langchain_community.document_loaders import PyPDFLoader
 
 from config.settings import settings
 from src.ingestion.chunker_factory import get_chunker
+from src.vectorstore.base import BaseVectorStore
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +34,7 @@ def get_category(filename: str) -> str:
 
 
 def ingest_document_from_base64(
-    vectorstore: Chroma,
+    vectorstore: BaseVectorStore,
     base64_text: str,
     filename: str,
     file_type: str,
@@ -64,7 +64,7 @@ def ingest_document_from_base64(
     # 3. Duplicate detection via SHA-256 hash
     file_hash = hashlib.sha256(decoded_content).hexdigest()
     try:
-        existing = vectorstore.get(where={"file_hash": file_hash}, limit=1)
+        existing = vectorstore.get_by_metadata(where={"file_hash": file_hash}, limit=1)
         if existing and existing.get("ids"):
             logger.info(
                 f"Document '{filename}' (hash={file_hash[:12]}…) "
