@@ -19,7 +19,7 @@ The system is built with production concerns in mind from the start: pluggable v
 │                  React Frontend  :3000                               │
 │  Vite · TypeScript · Tailwind CSS · Clerk React SDK · TanStack Query │
 │                                                                      │
-│   /           Chat (POST /query)                                     │
+│   /           Chat (POST /query) · inline citations · PDF download   │
 │   /documents  Drag-and-drop PDF ingest (POST /ingest)                │
 │   /contracts  Contract generator (POST /contracts/generate)          │
 │   /login      Clerk SignIn (email + Google SSO)                      │
@@ -33,11 +33,12 @@ The system is built with production concerns in mind from the start: pluggable v
 │  POST /query               ─► LangGraph multi-agent pipeline         │
 │  POST /contracts/generate  ─► ContractAgent + Jinja2 templates       │
 │  POST /ingest              ─► PDF chunking + vector store            │
-│  POST /retrieve            ─► Legacy single-agent RAG path           │
+│  POST /export/pdf          ─► Legal Advisory Report PDF download     │
 │  GET  /health              ─► Liveness probe                         │
 │  GET  /users/me            ─► Clerk user upsert                      │
 │  GET/POST /conversations   ─► Conversation history                   │
 │  POST /webhooks/clerk      ─► Svix-verified user sync                │
+│  POST /retrieve            ─► [DEPRECATED] use /query                │
 │                                                                      │
 │  ┌────────────────────────────────────────────────────────────────┐  │
 │  │              LangGraph Multi-Agent Pipeline                    │  │
@@ -47,6 +48,10 @@ The system is built with production concerns in mind from the start: pluggable v
 │  │        ├── confidence < 0.6  ──► [web_research_agent] ──► END  │  │
 │  │        ├── intent = contract ──► [contract_agent]     ──► END  │  │
 │  │        └── otherwise         ──► [domain_agent]                │  │
+│  │                                       │                        │  │
+│  │                              multi-query expansion              │  │
+│  │                              BM25 + semantic → RRF              │  │
+│  │                              BGE reranker (top 8)               │  │
 │  │                                       │                        │  │
 │  │                                    [qa_agent]                  │  │
 │  │                                       ├── pass  ──► END        │  │
@@ -79,20 +84,27 @@ The system is built with production concerns in mind from the start: pluggable v
 
 ## Core Concepts
 
-### Hybrid RAG Pipeline
+### Retrieval Pipeline — BM25 + Semantic + RRF + Reranking
 
-The retrieval layer combines two signals and merges them using a configurable weight:
+The retrieval layer is a four-stage pipeline designed to maximise both precision (exact legal terminology) and recall (semantic meaning):
 
-- **Semantic search** — dense vector similarity using BGE-M3 embeddings stored in the configured vector store. Captures meaning, synonyms, and context.
-- **Keyword search** — sparse TF-IDF index rebuilt in-process from the vector store corpus. Captures exact legal terminology (section numbers, act names, tax codes) that dense search can miss.
+**Stage 1 — Sparse retrieval (BM25):** `BM25Okapi` indexes the full document corpus with document-length normalisation and term-frequency saturation. This outperforms TF-IDF on legal documents, which vary widely in length. Exact section numbers, act names, and tax codes are retrieved with high precision.
 
-The two result sets are merged by weighted score (`SEMANTIC_WEIGHT=0.7` default), deduplicated, and passed to the LLM. The TF-IDF index refreshes in the background after every document ingest so subsequent keyword searches reflect new content immediately.
+**Stage 2 — Dense retrieval (Semantic):** BGE-M3 embeddings stored in the configured vector store. Captures meaning, synonyms, paraphrases, and cross-lingual legal terminology (Hindi terms in English documents).
+
+**Stage 3 — RRF Fusion:** Reciprocal Rank Fusion (`score = Σ 1/(k + rank_i)`, k=60) merges the two ranked lists using only rank positions, making it scale-invariant. Unlike weighted blending, RRF requires no score normalisation between incomparable BM25 and cosine similarity scales.
+
+**Stage 4 — BGE Reranker:** `BAAI/bge-reranker-v2-m3` — the cross-encoder reranker from the same BGE family as the embedding model — re-scores the merged candidate set and returns the top 8. Using a matched reranker ensures the semantic space of retrieval and reranking are aligned. Enable with `RERANKER_ENABLED=true`.
+
+### Multi-Query Expansion
+
+Before retrieval, Gemma generates 3 alternative phrasings of the user's query. All 4 queries (original + 3 variants) are run through the BM25 + semantic pipeline independently. Results are deduplicated by `chunk_id` (keeping the highest-scored copy), then the full unique candidate set is passed to the BGE reranker. This dramatically improves recall for queries where vocabulary mismatch would cause relevant chunks to be missed by any single phrasing.
 
 ### Multi-Agent Orchestration (LangGraph)
 
 Every `/query` request builds and executes a `StateGraph`. The `AgentState` TypedDict is the single mutable object passed through all nodes — no shared global state, fully traceable.
 
-The **Orchestrator** (Gemma) classifies the incoming query into one of six legal domains, produces a confidence score, and identifies the intent (informational query vs. contract generation). This single classification drives the entire routing decision:
+The **Orchestrator** (Gemma) classifies the incoming query into one of six legal domains, produces a confidence score, and identifies the intent (informational query vs. contract generation):
 
 - Low confidence → immediate web search fallback (no wasted RAG call)
 - Contract intent → directly to `ContractAgent` (no retrieval needed)
@@ -100,9 +112,31 @@ The **Orchestrator** (Gemma) classifies the incoming query into one of six legal
 
 The **QA Agent** checks the domain agent's response for faithfulness, completeness, and the presence of a legal disclaimer. If it fails either check, it writes a critique back into the state and re-invokes the domain agent. This loop runs at most twice to bound latency.
 
-### Context-Aware Chunking
+### Layout-Aware Chunking
 
-Documents are split using LangChain's `RecursiveCharacterTextSplitter` (default) or a semantic chunker. Chunks carry metadata: `filename`, `file_hash` (SHA-256 for deduplication), `category` (auto-classified from filename keywords: GST, Income Tax, Penal Code, Company Act, Other), and page number. The SHA-256 hash is checked before ingestion — duplicate documents are rejected without re-embedding.
+Activate with `CHUNK_STRATEGY=layout`. Uses `pdfplumber` to extract PDF content with structural awareness:
+
+- **Tables** are serialised to markdown (`| col | col |` format) and stored as discrete chunks with `element_type=table`
+- **Section headers** are detected by pattern matching and prepended to all following chunks: `[Section: GST Registration]\n{chunk text}` — giving the LLM section context even when a chunk spans a page break
+- **Reading order** is preserved; multi-column layouts are handled correctly
+- Falls back to `RecursiveCharacterTextSplitter` if extraction fails
+
+Each chunk carries `element_type`, `section_header`, and `page` metadata in addition to the standard `filename`, `category`, and `file_hash`.
+
+### Source Citations
+
+Every retrieved chunk is annotated with `[Source: filename.pdf, Page N]` before being passed to the LLM. The response prompt instructs the model to reference these tags inline. The API response carries a `citations[]` array — each entry has `filename`, `page`, `chunk_id`, and a 120-character excerpt. The React UI renders citations as a collapsible panel below each assistant message.
+
+### Descriptive Responses
+
+Domain agents generate structured, comprehensive responses with:
+- A direct answer to the question
+- Relevant statutory provisions with specific section numbers and act names
+- Practical implications for an Indian SMB
+- Deadlines, penalties, or compliance requirements where applicable
+- A legal disclaimer
+
+Pass `response_style=brief` in the request body for a concise 2–3 sentence answer instead.
 
 ### Vector Store Abstraction
 
@@ -114,13 +148,13 @@ Documents are split using LangChain's `RecursiveCharacterTextSplitter` (default)
 
 | Component | Model | Provider | Notes |
 |-----------|-------|----------|-------|
-| Generation | `gemma-4-26b-a4b-it` | Google AI (free tier) | Used by all domain agents, QA agent, orchestrator |
-| Embeddings | `BAAI/bge-m3` | HuggingFace (local) | Default; multilingual, strong on legal text |
-| Embeddings (alt) | `models/gemini-embedding-001` | Google AI | Switchable via `EMBEDDING_PROVIDER=google` |
-| Reranker (opt) | `cross-encoder/ms-marco-MiniLM-L-6-v2` | HuggingFace (local) | Disabled by default; enable with `RERANKER_ENABLED=true` |
-| Web Search | Tavily / Grok / Perplexity | External APIs | Provider selected by `WEB_SEARCH_PROVIDER` |
+| Generation | `gemma-4-26b-a4b-it` | Google AI (free tier) | All domain agents, QA agent, orchestrator, query expansion |
+| Embeddings | `BAAI/bge-m3` | HuggingFace (local) | Default; multilingual, strong on legal text, ~2 GB |
+| Embeddings (alt) | `models/gemini-embedding-001` | Google AI | Switch via `EMBEDDING_PROVIDER=google` |
+| Reranker | `BAAI/bge-reranker-v2-m3` | HuggingFace (local) | Matched cross-encoder for BGE-M3; enable with `RERANKER_ENABLED=true` |
+| Web Search | Tavily / Grok / Perplexity | External APIs | Provider via `WEB_SEARCH_PROVIDER` |
 
-BGE-M3 is chosen as the default embedding model because it is multilingual (handles Hindi legal terminology in documents), produces high-quality dense representations for long legal passages, and runs entirely locally with no API cost. The `~2 GB` model is downloaded once and cached by HuggingFace.
+BGE-M3 is the default embedding model because it is multilingual, produces high-quality dense representations for long legal passages, and runs entirely locally with no API cost. `bge-reranker-v2-m3` is used as the reranker because it is trained in the same semantic space as BGE-M3, giving consistent ranking behaviour across retrieval and reranking stages.
 
 ---
 
@@ -128,7 +162,7 @@ BGE-M3 is chosen as the default embedding model because it is multilingual (hand
 
 ### Vector Store (ChromaDB / MongoDB Atlas / pgvector / Pinecone)
 
-Stores document chunks as dense vectors alongside metadata. Used for semantic retrieval. The provider is selected at startup via `VECTOR_STORE_PROVIDER`.
+Stores document chunks as dense vectors alongside metadata. Used for semantic retrieval and BM25 corpus hydration. The provider is selected at startup via `VECTOR_STORE_PROVIDER`.
 
 | Provider | Free Tier | Best For |
 |----------|-----------|----------|
@@ -152,7 +186,7 @@ When `DATABASE_URL` is not set, the pool is skipped and all DB-dependent endpoin
 
 ### MLflow (experiment tracking)
 
-Every `/retrieve` and `/query` call starts an MLflow run under the `Legal_RAG_Assistant` experiment. Retrieved context, generated summaries, and faithfulness scores are logged as artifacts and metrics. Runs are stored locally in `app/mlruns/`. In production this is disabled (logging to stdout only) to avoid disk usage on the VM.
+Every `/query` call starts an MLflow run under the `Legal_RAG_Assistant` experiment. Retrieved context, generated summaries, and faithfulness scores are logged as artifacts and metrics. Runs are stored locally in `app/mlruns/`. In production this is disabled (logging to stdout only) to avoid disk usage on the VM.
 
 ---
 
@@ -165,7 +199,7 @@ Every `/retrieve` and `/query` call starts an MLflow run under the `Legal_RAG_As
 | **Webhook verification** | Svix signature check on `POST /webhooks/clerk`. Skipped in dev when `CLERK_WEBHOOK_SECRET` is empty. |
 | **Rate limiting** | `slowapi` middleware — 10 req/min per IP by default, configurable via `RATE_LIMIT_PER_MINUTE`. |
 | **CORS** | FastAPI `CORSMiddleware` — whitelists `localhost:3000` (React) and `localhost:8501` (Streamlit) in dev. Production origins added via env var. |
-| **Service API key** | Legacy `X-API-Key` header auth on `/retrieve`, `/ingest`, `/refresh-index`. Disabled when `SERVICE_API_KEY` is empty. |
+| **Service API key** | `X-API-Key` header auth on `/ingest`, `/refresh-index`. Disabled when `SERVICE_API_KEY` is empty. |
 | **Input validation** | Pydantic models on all request bodies — type coercion, length limits, regex patterns on file types and search modes. |
 | **Secrets** | All credentials in `app/.env` (never committed). `.env-example` documents every variable. `detect-secrets` pre-commit hook blocks accidental key commits. |
 | **TLS** | Nginx + Let's Encrypt on the production VM. Terminates SSL before FastAPI. |
@@ -189,11 +223,29 @@ The frontend is a single-page application at `frontend/` built with Vite 5, Reac
 | Route | Page | Description |
 |-------|------|-------------|
 | `/login` | LoginPage | Clerk sign-in: email/password + Google SSO |
-| `/` | DashboardPage | Chat interface — suggestion chips on first load, message history, source attribution |
+| `/` | DashboardPage | Chat interface — suggestion chips, message history, inline citations, PDF download |
 | `/documents` | DocumentsPage | Drag-and-drop or click-to-browse PDF upload with live ingest status |
 | `/contracts` | ContractsPage | Quick-template buttons + free-text prompt → rendered contract with download |
 
+**Chat features:**
+- Each assistant message shows a collapsible **Citations** panel — per-chunk source file, page number, and excerpt
+- **Download as PDF** button on every assistant message calls `POST /export/pdf` and triggers a browser download of a formatted Legal Advisory Report
+
 **Layout:** Collapsible sidebar on desktop, slide-in drawer on mobile. `UserButton` from Clerk in the sidebar footer handles avatar, profile, and sign-out with no custom code.
+
+---
+
+## PDF Export
+
+`POST /export/pdf` accepts any query + summary + citations and returns a formatted PDF:
+
+- Title: **Legal Advisory Report** with timestamp and domain
+- Query block
+- Full answer body (paragraph-by-paragraph, preserving formatting)
+- Sources section — deduplicated by filename + page, with excerpt
+- Disclaimer footer
+
+The React Chat UI calls this endpoint automatically when the user clicks **Download as PDF** on any assistant response.
 
 ---
 
@@ -320,15 +372,18 @@ GOOGLE_EMBEDDING_MODEL_NAME=models/gemini-embedding-001
 WEB_SEARCH_PROVIDER=tavily          # "tavily" | "grok" | "perplexity"
 
 # --- Chunking ---
-CHUNK_STRATEGY=recursive            # "recursive" | "semantic"
+CHUNK_STRATEGY=recursive            # "recursive" | "semantic" | "layout"
 CHUNK_SIZE=1000
 CHUNK_OVERLAP=200
 
 # --- Retrieval ---
-SEMANTIC_WEIGHT=0.7                 # 0.0 = pure keyword, 1.0 = pure semantic
-RERANKER_ENABLED=false
-RERANKER_MODEL=cross-encoder/ms-marco-MiniLM-L-6-v2
+RERANKER_ENABLED=true               # BGE reranker; false to skip for speed
+RERANKER_MODEL=BAAI/bge-reranker-v2-m3
 TOP_K_RETRIEVAL=8
+
+# --- Context Compression (optional) ---
+CONTEXT_COMPRESSION_ENABLED=false
+COMPRESSION_SIMILARITY_THRESHOLD=0.5
 
 # --- Vector Store ---
 VECTOR_STORE_PROVIDER=chromadb      # "chromadb" | "mongodb_atlas" | "pgvector" | "pinecone"
@@ -411,11 +466,21 @@ Set `MCP_ENABLED=true` in `app/.env` to activate the MCP code paths.
 ## API Reference
 
 ### POST /query
-Primary query endpoint. Runs the full LangGraph multi-agent pipeline.
+Primary endpoint. Runs multi-query expansion → BM25 + semantic → RRF → BGE reranker → domain agent → QA gate.
 ```bash
 curl -X POST http://localhost:8000/query \
   -H "Content-Type: application/json" \
-  -d '{"user_query": "What is the penalty for late GST filing?"}'
+  -d '{"user_query": "What is the penalty for late GST filing?", "response_style": "detailed"}'
+```
+Response includes `summary`, `citations[]`, `domain`, `confidence`, `results[]`.
+
+### POST /export/pdf
+Generate a downloadable Legal Advisory Report PDF.
+```bash
+curl -X POST http://localhost:8000/export/pdf \
+  -H "Content-Type: application/json" \
+  -d '{"query": "...", "summary": "...", "citations": [...], "domain": "GST"}' \
+  --output report.pdf
 ```
 
 ### POST /contracts/generate
@@ -442,17 +507,15 @@ curl http://localhost:8000/health
 
 ### GET /users/me *(Clerk JWT required)*
 ```bash
-curl http://localhost:8000/users/me \
-  -H "Authorization: Bearer <clerk_jwt>"
+curl http://localhost:8000/users/me -H "Authorization: Bearer <clerk_jwt>"
 ```
 
 ### GET /conversations *(Clerk JWT required)*
 ```bash
-curl http://localhost:8000/conversations \
-  -H "Authorization: Bearer <clerk_jwt>"
+curl http://localhost:8000/conversations -H "Authorization: Bearer <clerk_jwt>"
 ```
 
-> Add `-H "X-API-Key: <key>"` to any request when `SERVICE_API_KEY` is configured.
+> Add `-H "X-API-Key: <key>"` when `SERVICE_API_KEY` is configured.
 
 ---
 
@@ -469,8 +532,9 @@ Legal Advisor/
 │   │   ├── contract_agent.py        # Jinja2 contract renderer
 │   │   └── web_research_agent.py    # Provider-agnostic web search node
 │   ├── api/routes/
-│   │   ├── query.py                 # POST /query
+│   │   ├── query.py                 # POST /query (citations, response_style)
 │   │   ├── contracts.py             # POST /contracts/generate
+│   │   ├── export.py                # POST /export/pdf
 │   │   ├── users.py                 # GET /users/me, /conversations/*
 │   │   └── webhooks.py              # POST /webhooks/clerk
 │   ├── auth/
@@ -482,11 +546,17 @@ Legal Advisor/
 │   │   └── migrations.py            # Idempotent DDL (runs on every boot)
 │   ├── graph/
 │   │   ├── graph_builder.py         # StateGraph assembly + routing logic
-│   │   └── state.py                 # AgentState TypedDict
+│   │   └── state.py                 # AgentState TypedDict (citations, response_style)
 │   ├── mcp_client/                  # SSE client wrappers for MCP servers
 │   ├── src/
-│   │   ├── ingestion/               # PDF loading, chunking, SHA-256 dedup
-│   │   ├── retriever/               # HybridRAGPipeline (semantic + TF-IDF)
+│   │   ├── ingestion/
+│   │   │   ├── ingestion_src.py     # PDF ingest, SHA-256 dedup, metadata
+│   │   │   ├── chunker_factory.py   # recursive | semantic | layout dispatcher
+│   │   │   └── layout_chunker.py    # pdfplumber layout-aware chunker
+│   │   ├── retriever/
+│   │   │   ├── retriever_rag.py     # BM25 + semantic + RRF + BGE reranker
+│   │   │   ├── query_expander.py    # Multi-query expansion (3 Gemma variants)
+│   │   │   └── embedder_factory.py  # BGE-M3 / Google embedding selector
 │   │   ├── search/                  # Pluggable web search (Tavily/Grok/Perplexity)
 │   │   ├── vectorstore/             # BaseVectorStore ABC + 4 provider impls + factory
 │   │   └── evaluation/              # Faithfulness scoring + RAGAS integration
@@ -497,9 +567,18 @@ Legal Advisor/
 │   └── .env-example
 ├── frontend/
 │   ├── src/
-│   │   ├── components/              # Layout · Chat · MessageBubble · DocumentUpload · ContractViewer
-│   │   ├── hooks/                   # useChat · useDocuments · useGenerateContract
-│   │   ├── lib/                     # api.ts (axios + token injection) · utils.ts
+│   │   ├── components/
+│   │   │   ├── Chat.tsx             # Query input, message list, PDF download button
+│   │   │   ├── MessageBubble.tsx    # Message renderer + collapsible citations panel
+│   │   │   ├── Layout.tsx           # Responsive sidebar + mobile drawer
+│   │   │   ├── DocumentUpload.tsx   # Drag-and-drop PDF ingest
+│   │   │   └── ContractViewer.tsx   # Contract display + download
+│   │   ├── hooks/
+│   │   │   ├── useChat.ts           # Chat state, citations, PDF export call
+│   │   │   └── useDocuments.ts      # Ingest + contract generation
+│   │   ├── lib/
+│   │   │   ├── api.ts               # Axios instance + Bearer token injection
+│   │   │   └── utils.ts             # cn() Tailwind class merger
 │   │   └── pages/                   # LoginPage · DashboardPage · DocumentsPage · ContractsPage
 │   ├── .env                         # VITE_CLERK_PUBLISHABLE_KEY · VITE_API_URL
 │   ├── tailwind.config.ts
