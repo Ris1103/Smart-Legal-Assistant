@@ -56,7 +56,7 @@ export default function DocumentUpload() {
           <div className="flex flex-col items-center gap-2 text-red-500">
             <AlertCircle className="w-8 h-8" />
             <p className="text-sm font-medium">Upload failed</p>
-            <p className="text-xs">{error?.message}</p>
+            <p className="text-xs">{(error as Error)?.message}</p>
           </div>
         ) : (
           <div className="flex flex-col items-center gap-2 text-gray-400">

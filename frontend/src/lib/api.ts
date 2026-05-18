@@ -1,24 +1,27 @@
-import axios, { type AxiosError } from 'axios'
+import axios, { type AxiosError, type InternalAxiosRequestConfig } from 'axios'
 import { getLogger } from '@/lib/logger'
 
 const logger = getLogger('api')
 
+interface TimedRequestConfig extends InternalAxiosRequestConfig {
+  _startMs?: number
+}
+
 const api = axios.create({ baseURL: import.meta.env.VITE_API_URL ?? 'http://localhost:8000' })
 
 // --- Request interceptor: log every outgoing call ---
-api.interceptors.request.use((config) => {
+api.interceptors.request.use((config: TimedRequestConfig) => {
   const method = config.method?.toUpperCase() ?? 'REQUEST'
   logger.debug(`${method} ${config.url}`, { params: config.params })
-  // Attach start time so the response interceptor can compute latency
-  ;(config as Record<string, unknown>)._startMs = Date.now()
+  config._startMs = Date.now()
   return config
 })
 
 // --- Response interceptor: log success and errors ---
 api.interceptors.response.use(
   (response) => {
-    const config = response.config as Record<string, unknown>
-    const ms = config._startMs ? Date.now() - (config._startMs as number) : null
+    const config = response.config as TimedRequestConfig
+    const ms = config._startMs ? Date.now() - config._startMs : null
     const method = response.config.method?.toUpperCase() ?? 'REQUEST'
     logger.info(
       `${method} ${response.config.url} → ${response.status}${ms !== null ? ` (${ms}ms)` : ''}`,
