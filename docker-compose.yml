@@ -16,13 +16,9 @@ services:
     env_file: ./app/.env.prod
     volumes:
       - api_logs:/app/logs   # RotatingFileHandler output; inspect: docker compose exec api ls logs/
-    deploy:
-      resources:
-        limits:
-          memory: 896m         # leaves ~128 MB for OS on 1 GB VM; swap absorbs bursts
-          memswap_limit: 2560m # container may use up to 2560 MB total (memory + swap)
-        reservations:
-          memory: 512m
+    mem_limit: 896m
+    memswap_limit: 2560m       # allows up to ~1.6 GB swap use on top of mem_limit
+    mem_reservation: 512m
     logging:
       driver: json-file
       options:
@@ -48,12 +44,8 @@ services:
       - "443:443"
     volumes:
       - ./infra/certs:/etc/nginx/certs:ro   # TLS certs managed by certbot on the VM
-    deploy:
-      resources:
-        limits:
-          memory: 96m
-        reservations:
-          memory: 32m
+    mem_limit: 96m
+    mem_reservation: 32m
     logging:
       driver: json-file
       options:
