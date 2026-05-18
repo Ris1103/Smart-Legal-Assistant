@@ -38,7 +38,7 @@ class Settings(BaseSettings):
     # --- Retrieval ---
     semantic_weight: float = 0.7
     reranker_enabled: bool = False
-    reranker_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+    reranker_model: str = "BAAI/bge-reranker-v2-m3"
     top_k_retrieval: int = 8
 
     # --- Context Compression ---

@@ -25,7 +25,6 @@ CATEGORY_KEYWORDS = {
 
 
 def get_category(filename: str) -> str:
-    """Assigns a category to a file based on its name."""
     fname = filename.lower()
     for category, keywords in CATEGORY_KEYWORDS.items():
         if any(kw in fname for kw in keywords):
@@ -50,10 +49,8 @@ def ingest_document_from_base64(
     Raises:
         ValueError: If the file exceeds the configured size limit.
     """
-    # 1. Decode
     decoded_content = base64.b64decode(base64_text)
 
-    # 2. File size validation
     size_mb = len(decoded_content) / (1024 * 1024)
     if size_mb > settings.max_file_size_mb:
         raise ValueError(
@@ -61,7 +58,6 @@ def ingest_document_from_base64(
             f"{settings.max_file_size_mb} MB limit."
         )
 
-    # 3. Duplicate detection via SHA-256 hash
     file_hash = hashlib.sha256(decoded_content).hexdigest()
     try:
         existing = vectorstore.get_by_metadata(where={"file_hash": file_hash}, limit=1)
@@ -72,34 +68,37 @@ def ingest_document_from_base64(
             )
             return 0
     except Exception as e:
-        # Some ChromaDB versions may not support the 'where' filter on all
-        # fields; log and continue rather than blocking ingestion.
         logger.warning(
             f"Could not check for duplicate (will proceed with ingestion): {e}"
         )
 
     tmp_path = None
     try:
-        # 4. Save to a temporary file
         with tempfile.NamedTemporaryFile(delete=False, suffix=file_type) as tmp:
             tmp.write(decoded_content)
             tmp_path = tmp.name
 
         logger.info(f"File '{filename}' saved to temporary path: {tmp_path}")
 
-        # 5. Load and split the document
-        loader = PyPDFLoader(tmp_path)
-        docs = loader.load()
+        # Choose chunking strategy
+        if settings.chunk_strategy == "layout":
+            from src.ingestion.layout_chunker import extract_layout_chunks
+            chunks = extract_layout_chunks(
+                tmp_path,
+                chunk_size=settings.chunk_size,
+                chunk_overlap=settings.chunk_overlap,
+            )
+        else:
+            loader = PyPDFLoader(tmp_path)
+            docs = loader.load()
+            text_splitter = get_chunker()
+            chunks = text_splitter.split_documents(docs)
 
-        text_splitter = get_chunker()
-        chunks = text_splitter.split_documents(docs)
-
-        # 6. Build metadata for each chunk
         category = get_category(filename)
         ext = os.path.splitext(filename)[-1].lower()
 
         for i, chunk in enumerate(chunks):
-            new_metadata = {
+            base_meta = {
                 "filename": filename,
                 "filetype": ext,
                 "category": category,
@@ -108,14 +107,14 @@ def ingest_document_from_base64(
                 "total_chunks": len(chunks),
                 "file_hash": file_hash,
             }
-            new_metadata.update(metadata)
-            chunk.metadata = new_metadata
+            # Preserve layout metadata (element_type, section_header, page) if present
+            base_meta.update(chunk.metadata)
+            base_meta.update(metadata)
+            chunk.metadata = base_meta
 
-        # 7. Add chunks to the vector store in batches
         batch_size = 100
         for i in range(0, len(chunks), batch_size):
-            batch = chunks[i: i + batch_size]
-            vectorstore.add_documents(batch)
+            vectorstore.add_documents(chunks[i: i + batch_size])
 
         logger.info(
             f"Successfully ingested {len(chunks)} chunks from '{filename}' "

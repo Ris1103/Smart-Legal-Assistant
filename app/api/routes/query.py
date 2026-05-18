@@ -27,6 +27,7 @@ class QueryRequest(BaseModel):
     user_query: str = Field(..., min_length=3)
     session_id: Optional[str] = Field(None)
     collection: Optional[str] = Field(None)
+    response_style: str = Field("detailed", pattern="^(detailed|brief)$")
 
 
 class QueryResponse(BaseModel):
@@ -35,6 +36,7 @@ class QueryResponse(BaseModel):
     confidence: Optional[float] = None
     summary: str
     results: List[Dict[str, Any]]
+    citations: List[Dict[str, Any]] = []
     metadata: Dict[str, Any]
     mlflow_run_id: Optional[str] = None
 
@@ -88,6 +90,7 @@ def get_query_router(rag_pipeline, verify_api_key, mcp_manager_fn=None):
                 "qa_retries": 0,
                 "metadata": {},
                 "mcp_clients": mcp_clients or None,
+                "response_style": request.response_style,
             }
 
             try:
@@ -144,12 +147,15 @@ def get_query_router(rag_pipeline, verify_api_key, mcp_manager_fn=None):
             "qa_retries": final_state.get("qa_retries", 0),
         }
 
+        citations = final_state.get("citations", [])
+
         return QueryResponse(
             query=request.user_query,
             domain=domain,
             confidence=confidence,
             summary=summary,
             results=docs,
+            citations=citations,
             metadata=metadata,
             mlflow_run_id=run_id,
         )

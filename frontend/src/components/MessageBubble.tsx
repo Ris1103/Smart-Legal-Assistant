@@ -1,8 +1,12 @@
+import { useState } from 'react'
+import { ChevronDown, ChevronUp } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { Message } from '@/hooks/useChat'
 
 export default function MessageBubble({ message }: { message: Message }) {
   const isUser = message.role === 'user'
+  const [citationsOpen, setCitationsOpen] = useState(false)
+  const citations = message.citations ?? []
 
   return (
     <div className={cn('flex', isUser ? 'justify-end' : 'justify-start')}>
@@ -14,16 +18,44 @@ export default function MessageBubble({ message }: { message: Message }) {
       )}>
         <p className="whitespace-pre-wrap">{message.content}</p>
 
-        {!isUser && message.sources && message.sources.length > 0 && (
-          <div className="mt-2 pt-2 border-t border-gray-100">
-            <p className="text-xs text-gray-400 font-medium mb-1">Sources</p>
-            <div className="flex flex-wrap gap-1">
-              {message.sources.map((s, i) => (
-                <span key={i} className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full">
-                  {s}
-                </span>
-              ))}
-            </div>
+        {!isUser && (citations.length > 0 || (message.sources && message.sources.length > 0)) && (
+          <div className="mt-3 pt-2 border-t border-gray-100">
+            {/* Sources chips */}
+            {message.sources && message.sources.length > 0 && (
+              <div className="flex flex-wrap gap-1 mb-2">
+                {message.sources.map((s, i) => (
+                  <span key={i} className="text-xs bg-indigo-50 text-indigo-600 px-2 py-0.5 rounded-full border border-indigo-100">
+                    {s}
+                  </span>
+                ))}
+              </div>
+            )}
+
+            {/* Citations collapsible */}
+            {citations.length > 0 && (
+              <div>
+                <button
+                  onClick={() => setCitationsOpen(o => !o)}
+                  className="flex items-center gap-1 text-xs text-gray-400 hover:text-gray-600 transition-colors"
+                >
+                  {citationsOpen ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+                  {citations.length} source{citations.length !== 1 ? 's' : ''}
+                </button>
+
+                {citationsOpen && (
+                  <div className="mt-2 space-y-2">
+                    {citations.map((c, i) => (
+                      <div key={i} className="bg-gray-50 rounded-lg px-3 py-2 border border-gray-100">
+                        <p className="text-xs font-medium text-indigo-700">{c.filename} — p.{c.page}</p>
+                        {c.excerpt && (
+                          <p className="text-xs text-gray-500 mt-0.5 italic">"{c.excerpt}…"</p>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         )}
       </div>

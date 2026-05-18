@@ -1,7 +1,9 @@
 import { useRef, useEffect, useState } from 'react'
-import { Send, Loader2, Trash2 } from 'lucide-react'
+import { Send, Loader2, Trash2, FileDown } from 'lucide-react'
 import { useChat } from '@/hooks/useChat'
+import type { Message } from '@/hooks/useChat'
 import MessageBubble from './MessageBubble'
+import api from '@/lib/api'
 
 const SUGGESTIONS = [
   'What are the GST filing deadlines for a startup?',
@@ -9,6 +11,30 @@ const SUGGESTIONS = [
   'What are TDS deduction rules for salary?',
   'Explain Section 80C tax deductions.',
 ]
+
+async function downloadPDF(msg: Message, query: string) {
+  try {
+    const response = await api.post(
+      '/export/pdf',
+      {
+        query,
+        summary: msg.content,
+        citations: msg.citations ?? [],
+        domain: msg.domain ?? null,
+        metadata: msg.rawData?.metadata ?? {},
+      },
+      { responseType: 'blob' },
+    )
+    const url = URL.createObjectURL(response.data)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `legal_advisory_${Date.now()}.pdf`
+    a.click()
+    URL.revokeObjectURL(url)
+  } catch {
+    alert('Failed to generate PDF. Please try again.')
+  }
+}
 
 export default function Chat() {
   const { messages, loading, error, sendMessage, clearMessages } = useChat()
@@ -25,6 +51,14 @@ export default function Chat() {
     if (!q || loading) return
     setInput('')
     sendMessage(q)
+  }
+
+  // Find the most recent user message for a given assistant message
+  function getUserQuery(assistantIndex: number): string {
+    for (let i = assistantIndex - 1; i >= 0; i--) {
+      if (messages[i].role === 'user') return messages[i].content
+    }
+    return ''
   }
 
   return (
@@ -54,7 +88,7 @@ export default function Chat() {
               {SUGGESTIONS.map((s) => (
                 <button
                   key={s}
-                  onClick={() => { setInput(s); sendMessage(s) }}
+                  onClick={() => sendMessage(s)}
                   className="text-left text-sm bg-white border border-gray-200 rounded-xl px-4 py-3 text-gray-600 hover:border-indigo-300 hover:text-indigo-700 transition-colors shadow-sm"
                 >
                   {s}
@@ -64,7 +98,21 @@ export default function Chat() {
           </div>
         )}
 
-        {messages.map((m) => <MessageBubble key={m.id} message={m} />)}
+        {messages.map((m, idx) => (
+          <div key={m.id}>
+            <MessageBubble message={m} />
+            {m.role === 'assistant' && (
+              <div className="flex justify-start mt-1 ml-1">
+                <button
+                  onClick={() => downloadPDF(m, getUserQuery(idx))}
+                  className="flex items-center gap-1 text-xs text-gray-400 hover:text-indigo-600 transition-colors"
+                >
+                  <FileDown className="w-3.5 h-3.5" /> Download as PDF
+                </button>
+              </div>
+            )}
+          </div>
+        ))}
 
         {loading && (
           <div className="flex justify-start">
@@ -74,9 +122,7 @@ export default function Chat() {
           </div>
         )}
 
-        {error && (
-          <p className="text-center text-xs text-red-500">{error}</p>
-        )}
+        {error && <p className="text-center text-xs text-red-500">{error}</p>}
 
         <div ref={bottomRef} />
       </div>

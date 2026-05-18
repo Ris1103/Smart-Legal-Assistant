@@ -72,12 +72,20 @@ def call_ingest_api(uploaded_file):
 
 
 def call_retrieve_api(query: str, filename_filter: str = None):
-    """Calls the /retrieve endpoint, optionally with a filename filter."""
-    payload = {"user_query": query, "filename_filter": filename_filter}
+    """Calls the /query endpoint (multi-agent pipeline)."""
+    payload = {"user_query": query, "response_style": "detailed"}
     try:
-        response = requests.post(f"{FASTAPI_URL}/retrieve", json=payload, timeout=120)
+        response = requests.post(f"{FASTAPI_URL}/query", json=payload, timeout=120)
         response.raise_for_status()
-        return response.json()
+        data = response.json()
+        # Normalise to the shape the UI expects from the old /retrieve response
+        return {
+            "query": data.get("query", query),
+            "summary": data.get("summary", ""),
+            "results": data.get("results", []),
+            "citations": data.get("citations", []),
+            "metadata": data.get("metadata", {}),
+        }
     except requests.exceptions.RequestException as e:
         st.error(f"Could not get answer: {e}")
         return None

@@ -13,6 +13,7 @@ def get_chunker(cfg=None, embedder=None):
                 "An embedder must be provided when chunk_strategy='semantic'."
             )
         return SemanticChunker(embedder)
+    # "layout" is handled directly in ingest_document_from_base64
     return RecursiveCharacterTextSplitter(
         chunk_size=cfg.chunk_size, chunk_overlap=cfg.chunk_overlap
     )

@@ -12,6 +12,7 @@ from fastapi import (
     BackgroundTasks,
     Depends,
     Security,
+    Response,
 )
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security.api_key import APIKeyHeader
@@ -33,6 +34,7 @@ from api.routes.query import get_query_router
 from api.routes.contracts import get_contracts_router
 from api.routes.users import router as users_router, conv_router
 from api.routes.webhooks import router as webhooks_router
+from api.routes.export import router as export_router
 from db.database import init_pool, close_pool, _pool
 from db.migrations import run_migrations
 
@@ -128,6 +130,7 @@ app.include_router(get_contracts_router(rag_pipeline, verify_api_key, _get_mcp))
 app.include_router(users_router)
 app.include_router(conv_router)
 app.include_router(webhooks_router)
+app.include_router(export_router)
 
 
 @app.get("/health", tags=["ops"])
@@ -184,7 +187,11 @@ class RefreshResponse(BaseModel):
     response_model=RetrieveResponse,
     dependencies=[Depends(verify_api_key)],
 )
-async def retrieve(request: RetrieveRequest):
+async def retrieve(request: RetrieveRequest, response: Response):
+    response.headers["Deprecation"] = "true"
+    response.headers["Sunset"] = "Sat, 01 Nov 2025 00:00:00 GMT"
+    response.headers["Link"] = '</query>; rel="successor-version"'
+
     if not rag_pipeline:
         raise HTTPException(
             status_code=503, detail="RAG Pipeline unavailable."

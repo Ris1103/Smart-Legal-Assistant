@@ -27,7 +27,9 @@ class AgentState(TypedDict, total=False):
     retrieved_docs: List[Dict[str, Any]]  # Docs from domain agent
     summary: str                          # Generated answer / contract
     source_files: List[str]               # Originating filenames
+    citations: List[Dict[str, Any]]       # Per-chunk citation records
     search_type: str                      # "local" | "web"
+    response_style: str                   # "detailed" | "brief"
 
     # ------------------------------------------------------------------ #
     # QA                                                                   #
