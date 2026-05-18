@@ -9,6 +9,7 @@ app/.env.local
 app/.env.prod
 sample_results/
 app/logs/
+frontend/.env.production
 __pycache__/
 mlartifacts/
 mlruns/

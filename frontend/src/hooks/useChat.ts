@@ -1,5 +1,8 @@
 import { useState } from 'react'
 import api from '@/lib/api'
+import { getLogger } from '@/lib/logger'
+
+const logger = getLogger('useChat')
 
 export interface Citation {
   filename: string
@@ -30,8 +33,18 @@ export function useChat() {
     setMessages(prev => [...prev, userMsg])
     setLoading(true)
 
+    logger.info('Sending query', { queryLength: query.length, responseStyle })
+
     try {
       const { data } = await api.post('/query', { user_query: query, response_style: responseStyle })
+
+      logger.info('Query response received', {
+        domain: data.domain,
+        confidence: data.confidence,
+        numResults: data.results?.length ?? 0,
+        searchType: data.metadata?.search_type,
+      })
+
       const assistantMsg: Message = {
         id: crypto.randomUUID(),
         role: 'assistant',
@@ -44,13 +57,18 @@ export function useChat() {
       }
       setMessages(prev => [...prev, assistantMsg])
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Request failed.')
+      const message = err instanceof Error ? err.message : 'Request failed.'
+      logger.error('Query failed', { error: message, query: query.slice(0, 80) })
+      setError(message)
     } finally {
       setLoading(false)
     }
   }
 
-  function clearMessages() { setMessages([]) }
+  function clearMessages() {
+    logger.debug('Clearing chat messages')
+    setMessages([])
+  }
 
   return { messages, loading, error, sendMessage, clearMessages }
 }

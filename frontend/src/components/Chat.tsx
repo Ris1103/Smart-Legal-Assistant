@@ -4,6 +4,9 @@ import { useChat } from '@/hooks/useChat'
 import type { Message } from '@/hooks/useChat'
 import MessageBubble from './MessageBubble'
 import api from '@/lib/api'
+import { getLogger } from '@/lib/logger'
+
+const logger = getLogger('Chat')
 
 const SUGGESTIONS = [
   'What are the GST filing deadlines for a startup?',
@@ -13,6 +16,7 @@ const SUGGESTIONS = [
 ]
 
 async function downloadPDF(msg: Message, query: string) {
+  logger.info('Requesting PDF export', { domain: msg.domain, queryLength: query.length })
   try {
     const response = await api.post(
       '/export/pdf',
@@ -31,7 +35,10 @@ async function downloadPDF(msg: Message, query: string) {
     a.download = `legal_advisory_${Date.now()}.pdf`
     a.click()
     URL.revokeObjectURL(url)
-  } catch {
+    logger.info('PDF export downloaded successfully')
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'Unknown error'
+    logger.error('PDF export failed', { error: message })
     alert('Failed to generate PDF. Please try again.')
   }
 }
