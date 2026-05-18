@@ -15,7 +15,8 @@ services:
     restart: unless-stopped
     env_file: ./app/.env.prod
     volumes:
-      - api_logs:/app/logs   # RotatingFileHandler output; inspect: docker compose exec api ls logs/
+      - api_logs:/app/logs
+      - hf_cache:/root/.cache/huggingface   # persists BGE model across deploys
     mem_limit: 896m
     memswap_limit: 2560m       # allows up to ~1.6 GB swap use on top of mem_limit
     mem_reservation: 512m
@@ -29,7 +30,7 @@ services:
              "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 30s
       timeout: 10s
-      start_period: 60s
+      start_period: 600s
       retries: 3
     expose:
       - "8000"
@@ -59,6 +60,7 @@ services:
 
 volumes:
   api_logs:
+  hf_cache:
 
 networks:
   internal:
