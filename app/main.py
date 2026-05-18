@@ -48,7 +48,6 @@ setup_logging(
     backup_count=settings.log_backup_count,
 )
 logger = logging.getLogger(__name__)
-mlflow.set_experiment("Legal_RAG_Assistant")
 
 limiter = Limiter(key_func=get_remote_address)
 
@@ -58,7 +57,13 @@ _mcp_manager = None
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _mcp_manager
+    global _mcp_manager, rag_pipeline
+    mlflow.set_experiment("Legal_RAG_Assistant")
+    # RAG pipeline (initialises embedding model + vector store — may make network calls)
+    try:
+        rag_pipeline = HybridRAGPipeline()
+    except Exception as e:
+        logger.error(f"Fatal error during RAG Pipeline initialization: {e}")
     # Database pool
     await init_pool()
     if _pool:
@@ -119,12 +124,8 @@ async def verify_api_key(
         )
 
 
-# --- RAG Pipeline (singleton) ---
-try:
-    rag_pipeline = HybridRAGPipeline()
-except Exception as e:
-    logger.error(f"Fatal error during RAG Pipeline initialization: {e}")
-    rag_pipeline = None
+# Initialised during lifespan so heavy I/O (embedding model, vector store) doesn't block import
+rag_pipeline = None
 
 # --- Phase 2 Multi-Agent Routes ---
 # _mcp_manager is None at import time; routers read it via a closure so they
