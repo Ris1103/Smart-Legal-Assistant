@@ -31,7 +31,7 @@ remote_state {
 }
 
 inputs = {
-  project_id            = "legal-advisor-prod"   # replace with your GCP project ID
+  project_id            = "legal-advisor-prod"
   region                = "asia-south1"
   zone                  = "asia-south1-a"
   instance_name         = "legal-advisor-vm"
