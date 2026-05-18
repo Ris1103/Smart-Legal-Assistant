@@ -7,8 +7,8 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_API: ghcr.io/${{ github.repository_owner }}/legal-advisor-api
-  IMAGE_FRONTEND: ghcr.io/${{ github.repository_owner }}/legal-advisor-frontend
+  IMAGE_API: ghcr.io/ris1103/legal-advisor-api
+  IMAGE_FRONTEND: ghcr.io/ris1103/legal-advisor-frontend
 
 jobs:
   # ── Job 1: build and push both images ──────────────────────────────────────
