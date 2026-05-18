@@ -54,20 +54,35 @@ async def clerk_webhook(
     svix_signature: str = Header(None, alias="svix-signature"),
 ) -> Dict[str, Any]:
     payload = await request.body()
+    logger.debug("Clerk webhook received svix_id=%s", svix_id)
 
     if not _verify_svix_signature(payload, svix_id or "", svix_timestamp or "", svix_signature or ""):
+        logger.warning("Clerk webhook signature verification failed svix_id=%s", svix_id)
         raise HTTPException(status_code=400, detail="Invalid webhook signature.")
 
-    event = json.loads(payload)
+    try:
+        event = json.loads(payload)
+    except json.JSONDecodeError as exc:
+        logger.error("Clerk webhook payload is not valid JSON svix_id=%s: %s", svix_id, exc)
+        raise HTTPException(status_code=400, detail="Invalid JSON payload.")
+
     event_type = event.get("type", "")
     data = event.get("data", {})
+    logger.info("Clerk webhook event_type=%s svix_id=%s", event_type, svix_id)
 
     if event_type in ("user.created", "user.updated"):
         clerk_id = data.get("id")
         email_addresses = data.get("email_addresses", [])
         email = email_addresses[0].get("email_address", "") if email_addresses else ""
 
-        if clerk_id and email:
+        if not clerk_id or not email:
+            logger.warning(
+                "Clerk webhook %s missing clerk_id or email — skipping upsert",
+                event_type,
+            )
+            return {"status": "ok", "action": "skipped"}
+
+        try:
             await conn.execute(
                 """
                 INSERT INTO users (clerk_id, email)
@@ -77,6 +92,9 @@ async def clerk_webhook(
                 clerk_id,
                 email,
             )
-            logger.info("Upserted user clerk_id=%s email=%s", clerk_id, email)
+            logger.info("Upserted user clerk_id=%s email=%s event=%s", clerk_id, email, event_type)
+        except asyncpg.PostgresError as exc:
+            logger.error("DB error upserting user clerk_id=%s: %s", clerk_id, exc)
+            raise HTTPException(status_code=500, detail="Failed to persist user.")
 
     return {"status": "ok"}

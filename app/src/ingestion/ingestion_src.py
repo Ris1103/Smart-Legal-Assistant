@@ -47,29 +47,42 @@ def ingest_document_from_base64(
         Number of chunks added. Returns 0 if the document is a duplicate.
 
     Raises:
-        ValueError: If the file exceeds the configured size limit.
+        ValueError: If the file exceeds the configured size limit or payload is invalid.
     """
-    decoded_content = base64.b64decode(base64_text)
+    logger.info("Ingesting file='%s' type='%s'", filename, file_type)
+
+    try:
+        decoded_content = base64.b64decode(base64_text)
+    except Exception as exc:
+        logger.error("Failed to base64-decode payload for file='%s': %s", filename, exc)
+        raise ValueError(f"Invalid base64 payload for '{filename}'.") from exc
 
     size_mb = len(decoded_content) / (1024 * 1024)
+    logger.debug("Decoded file='%s' size=%.2f MB", filename, size_mb)
     if size_mb > settings.max_file_size_mb:
+        logger.warning(
+            "File='%s' rejected: size=%.1f MB exceeds limit=%d MB",
+            filename, size_mb, settings.max_file_size_mb,
+        )
         raise ValueError(
             f"File '{filename}' is {size_mb:.1f} MB, which exceeds the "
             f"{settings.max_file_size_mb} MB limit."
         )
 
     file_hash = hashlib.sha256(decoded_content).hexdigest()
+    logger.debug("File='%s' sha256=%s…", filename, file_hash[:16])
     try:
         existing = vectorstore.get_by_metadata(where={"file_hash": file_hash}, limit=1)
         if existing and existing.get("ids"):
             logger.info(
-                f"Document '{filename}' (hash={file_hash[:12]}…) "
-                "already ingested. Skipping."
+                "Document '%s' (hash=%s…) already ingested — skipping.",
+                filename, file_hash[:12],
             )
             return 0
-    except Exception as e:
+    except Exception as exc:
         logger.warning(
-            f"Could not check for duplicate (will proceed with ingestion): {e}"
+            "Could not check for duplicate file='%s' (proceeding with ingestion): %s",
+            filename, exc,
         )
 
     tmp_path = None
@@ -78,10 +91,10 @@ def ingest_document_from_base64(
             tmp.write(decoded_content)
             tmp_path = tmp.name
 
-        logger.info(f"File '{filename}' saved to temporary path: {tmp_path}")
+        logger.debug("File='%s' written to tmp_path='%s'", filename, tmp_path)
 
-        # Choose chunking strategy
         if settings.chunk_strategy == "layout":
+            logger.debug("Using layout chunker for file='%s'", filename)
             from src.ingestion.layout_chunker import extract_layout_chunks
             chunks = extract_layout_chunks(
                 tmp_path,
@@ -89,13 +102,23 @@ def ingest_document_from_base64(
                 chunk_overlap=settings.chunk_overlap,
             )
         else:
+            logger.debug(
+                "Using %s chunker (size=%d overlap=%d) for file='%s'",
+                settings.chunk_strategy, settings.chunk_size,
+                settings.chunk_overlap, filename,
+            )
             loader = PyPDFLoader(tmp_path)
             docs = loader.load()
             text_splitter = get_chunker()
             chunks = text_splitter.split_documents(docs)
 
+        if not chunks:
+            logger.warning("No chunks produced from file='%s' — PDF may be empty or unreadable", filename)
+            return 0
+
         category = get_category(filename)
         ext = os.path.splitext(filename)[-1].lower()
+        logger.debug("File='%s' category='%s' chunks=%d", filename, category, len(chunks))
 
         for i, chunk in enumerate(chunks):
             base_meta = {
@@ -107,22 +130,34 @@ def ingest_document_from_base64(
                 "total_chunks": len(chunks),
                 "file_hash": file_hash,
             }
-            # Preserve layout metadata (element_type, section_header, page) if present
             base_meta.update(chunk.metadata)
             base_meta.update(metadata)
             chunk.metadata = base_meta
 
         batch_size = 100
-        for i in range(0, len(chunks), batch_size):
-            vectorstore.add_documents(chunks[i: i + batch_size])
+        total_batches = (len(chunks) + batch_size - 1) // batch_size
+        for batch_idx, i in enumerate(range(0, len(chunks), batch_size)):
+            batch = chunks[i: i + batch_size]
+            logger.debug(
+                "Storing batch %d/%d (%d chunks) for file='%s'",
+                batch_idx + 1, total_batches, len(batch), filename,
+            )
+            try:
+                vectorstore.add_documents(batch)
+            except Exception as exc:
+                logger.error(
+                    "Failed to store batch %d/%d for file='%s': %s",
+                    batch_idx + 1, total_batches, filename, exc, exc_info=True,
+                )
+                raise
 
         logger.info(
-            f"Successfully ingested {len(chunks)} chunks from '{filename}' "
-            f"into category '{category}'."
+            "Ingested %d chunks from '%s' into category='%s'",
+            len(chunks), filename, category,
         )
         return len(chunks)
 
     finally:
         if tmp_path and os.path.exists(tmp_path):
             os.unlink(tmp_path)
-            logger.info(f"Cleaned up temporary file: {tmp_path}")
+            logger.debug("Cleaned up tmp_path='%s'", tmp_path)

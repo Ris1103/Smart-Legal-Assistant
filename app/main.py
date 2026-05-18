@@ -37,9 +37,16 @@ from api.routes.webhooks import router as webhooks_router
 from api.routes.export import router as export_router
 from db.database import init_pool, close_pool, _pool
 from db.migrations import run_migrations
+from logging_config import setup_logging
 
-# --- Setup ---
-logging.basicConfig(level=logging.INFO)
+# --- Logging bootstrap (before any other module logs) ---
+setup_logging(
+    level=settings.log_level,
+    log_to_file=settings.log_to_file,
+    log_dir=settings.log_dir,
+    max_bytes=settings.log_max_bytes,
+    backup_count=settings.log_backup_count,
+)
 logger = logging.getLogger(__name__)
 mlflow.set_experiment("Legal_RAG_Assistant")
 

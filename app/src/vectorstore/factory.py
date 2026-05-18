@@ -22,7 +22,14 @@ class VectorStoreFactory:
     ) -> BaseVectorStore:
         provider = provider or settings.vector_store_provider
         if provider not in cls._instances:
-            cls._instances[provider] = cls._create(provider, embedding_model)
+            try:
+                cls._instances[provider] = cls._create(provider, embedding_model)
+            except Exception as exc:
+                logger.error(
+                    "VectorStoreFactory: failed to create provider='%s': %s",
+                    provider, exc, exc_info=True,
+                )
+                raise
         return cls._instances[provider]
 
     @classmethod

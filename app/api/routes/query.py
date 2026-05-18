@@ -58,10 +58,17 @@ def get_query_router(rag_pipeline, verify_api_key, mcp_manager_fn=None):
     )
     async def query(request: QueryRequest):
         if not rag_pipeline:
+            logger.error("POST /query — RAG Pipeline unavailable")
             raise HTTPException(
                 status_code=503,
                 detail="RAG Pipeline unavailable.",
             )
+
+        logger.info(
+            "POST /query session_id=%s style=%s query_len=%d",
+            request.session_id, request.response_style, len(request.user_query),
+        )
+        logger.debug("POST /query query=%r", request.user_query[:120])
 
         run_name = (
             f"agent_query_{request.user_query[:40].replace(' ', '_')}"
@@ -95,11 +102,14 @@ def get_query_router(rag_pipeline, verify_api_key, mcp_manager_fn=None):
 
             try:
                 final_state = await graph.ainvoke(initial_state)
-            except Exception as e:
-                logger.error(f"Agent graph failed: {e}")
+            except Exception as exc:
+                logger.error(
+                    "Agent graph failed session_id=%s: %s",
+                    request.session_id, exc, exc_info=True,
+                )
                 raise HTTPException(
                     status_code=500,
-                    detail=f"Agent pipeline error: {e}",
+                    detail="Agent pipeline error. Please try again.",
                 )
 
             summary = final_state.get("summary", "")
@@ -148,6 +158,12 @@ def get_query_router(rag_pipeline, verify_api_key, mcp_manager_fn=None):
         }
 
         citations = final_state.get("citations", [])
+
+        logger.info(
+            "POST /query complete domain=%s confidence=%.2f docs=%d qa_retries=%d mlflow=%s",
+            domain, confidence or 0.0, len(docs),
+            metadata.get("qa_retries", 0), run_id,
+        )
 
         return QueryResponse(
             query=request.user_query,

@@ -77,32 +77,50 @@ def get_contracts_router(rag_pipeline, verify_api_key, mcp_manager_fn=None):
     )
     async def generate_contract(request: ContractRequest):
         if not rag_pipeline:
+            logger.error("POST /contracts/generate — RAG Pipeline unavailable")
             raise HTTPException(
                 status_code=503, detail="RAG Pipeline unavailable."
             )
 
-        agent = ContractAgent(
-            generative_model=rag_pipeline.generative_model
+        logger.info(
+            "POST /contracts/generate contract_type=%r query_len=%d",
+            request.contract_type,
+            len(request.user_query),
         )
 
-        # Build an initial AgentState-like dict
-        initial_state: Dict[str, Any] = {
-            "query": request.user_query,
-            "metadata": {},
-        }
-
-        # If contract_type is explicitly provided, inject it so the
-        # agent's detection skips or is overridden.
-        if request.contract_type:
-            initial_state["contract_type"] = request.contract_type
-
-        result = agent(initial_state)
-
-        if result.get("error"):
-            raise HTTPException(
-                status_code=400, detail=result["error"]
+        try:
+            agent = ContractAgent(
+                generative_model=rag_pipeline.generative_model
             )
 
+            initial_state: Dict[str, Any] = {
+                "query": request.user_query,
+                "metadata": {},
+            }
+            if request.contract_type:
+                initial_state["contract_type"] = request.contract_type
+
+            result = agent(initial_state)
+        except Exception as exc:
+            logger.error(
+                "ContractAgent failed contract_type=%r: %s",
+                request.contract_type, exc, exc_info=True,
+            )
+            raise HTTPException(
+                status_code=500, detail="Contract generation failed."
+            )
+
+        if result.get("error"):
+            logger.warning(
+                "ContractAgent returned error contract_type=%r: %s",
+                request.contract_type, result["error"],
+            )
+            raise HTTPException(status_code=400, detail=result["error"])
+
+        logger.info(
+            "Contract generated contract_type=%s",
+            result.get("contract_type", "unknown"),
+        )
         return ContractResponse(
             contract_type=result.get("contract_type", "unknown"),
             contract_text=result.get("contract_text", ""),

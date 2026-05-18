@@ -85,6 +85,13 @@ class Settings(BaseSettings):
     # --- Rate Limiting ---
     rate_limit_per_minute: int = 10
 
+    # --- Logging ---
+    log_level: str = "INFO"          # DEBUG | INFO | WARNING | ERROR
+    log_to_file: bool = True
+    log_dir: str = "logs"
+    log_max_bytes: int = 10 * 1024 * 1024  # 10 MB per file
+    log_backup_count: int = 5
+
     # --- MCP Integration ---
     mcp_enabled: bool = False
     mcp_search_server_url: str = "http://localhost:8003"
