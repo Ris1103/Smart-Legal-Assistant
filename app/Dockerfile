@@ -9,8 +9,10 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 # Copy dependency manifests first (layer cache)
 COPY pyproject.toml uv.lock ./
 
-# Install all production deps into /app/.venv; no cache to keep image lean
-RUN uv sync --frozen --no-dev --no-cache
+# Install all production deps into /app/.venv
+# --mount=type=cache keeps the uv download cache between builds without bloating the final image
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --frozen --no-dev
 
 # ── Stage 2: runtime ────────────────────────────────────────────────────────
 FROM python:3.12-slim AS runtime
