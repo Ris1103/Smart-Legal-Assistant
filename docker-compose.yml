@@ -15,10 +15,9 @@ services:
     restart: unless-stopped
     env_file: ./app/.env.prod
     volumes:
-      - api_logs:/app/logs
       - hf_cache:/root/.cache/huggingface   # persists BGE model across deploys
-    mem_limit: 896m
-    memswap_limit: 2560m       # allows up to ~1.6 GB swap use on top of mem_limit
+    mem_limit: 1536m
+    memswap_limit: 3072m       # allows up to ~1.5 GB swap on top of mem_limit
     mem_reservation: 512m
     logging:
       driver: json-file
@@ -59,7 +58,6 @@ services:
       - internal
 
 volumes:
-  api_logs:
   hf_cache:
 
 networks:
