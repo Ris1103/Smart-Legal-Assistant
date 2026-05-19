@@ -17,10 +17,10 @@ python-dotenv>=1.0.1
 ragas>=0.2.0
 datasets>=2.20.0
 scikit-learn>=1.5.0
-sentence-transformers>=3.0.1
-langchain-huggingface>=0.0.3
+# sentence-transformers and langchain-huggingface are in the [reranker] optional group.
+# Install with: uv sync --extra reranker (only needed when RERANKER_ENABLED=true)
 rank-bm25>=0.2.2
-FlagEmbedding>=1.2.0
+# FlagEmbedding is in the [reranker] optional group (see above)
 pdfplumber>=0.11.0
 fpdf2>=2.7.0
 tavily-python>=0.3.0

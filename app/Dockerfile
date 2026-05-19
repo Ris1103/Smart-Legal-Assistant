@@ -9,10 +9,15 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 # Copy dependency manifests first (layer cache)
 COPY pyproject.toml uv.lock ./
 
+# INSTALL_RERANKER=true adds sentence-transformers + FlagEmbedding (~4 GB PyTorch).
+# Leave unset (default) for a lean image when RERANKER_ENABLED=false.
+ARG INSTALL_RERANKER=false
+
 # Install all production deps into /app/.venv
 # --mount=type=cache keeps the uv download cache between builds without bloating the final image
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-dev
+    uv sync --frozen --no-dev \
+    $([ "$INSTALL_RERANKER" = "true" ] && echo "--extra reranker" || echo "")
 
 # ── Stage 2: runtime ────────────────────────────────────────────────────────
 FROM python:3.12-slim AS runtime
