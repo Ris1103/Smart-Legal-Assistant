@@ -45,10 +45,11 @@ class QueryResponse(BaseModel):
 # Endpoint                                                             #
 # ------------------------------------------------------------------ #
 
-def get_query_router(rag_pipeline, verify_api_key, mcp_manager_fn=None):
+def get_query_router(get_rag_pipeline, verify_api_key, mcp_manager_fn=None):
     """
     Factory that creates the router with injected dependencies.
-    Called once from main.py after the pipeline is initialised.
+    get_rag_pipeline is a callable so it always returns the live instance,
+    not the None value captured at startup.
     """
 
     @router.post(
@@ -57,6 +58,7 @@ def get_query_router(rag_pipeline, verify_api_key, mcp_manager_fn=None):
         dependencies=[Depends(verify_api_key)],
     )
     async def query(request: QueryRequest):
+        rag_pipeline = get_rag_pipeline()
         if not rag_pipeline:
             logger.error("POST /query — RAG Pipeline unavailable")
             raise HTTPException(

@@ -39,9 +39,10 @@ class ContractResponse(BaseModel):
     message: str
 
 
-def get_contracts_router(rag_pipeline, verify_api_key, mcp_manager_fn=None):
+def get_contracts_router(get_rag_pipeline, verify_api_key, mcp_manager_fn=None):
     """
     Factory that creates the router with injected dependencies.
+    get_rag_pipeline is a callable so it always returns the live instance.
     """
 
     @router.get(
@@ -76,6 +77,7 @@ def get_contracts_router(rag_pipeline, verify_api_key, mcp_manager_fn=None):
         dependencies=[Depends(verify_api_key)],
     )
     async def generate_contract(request: ContractRequest):
+        rag_pipeline = get_rag_pipeline()
         if not rag_pipeline:
             logger.error("POST /contracts/generate — RAG Pipeline unavailable")
             raise HTTPException(

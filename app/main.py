@@ -128,13 +128,16 @@ async def verify_api_key(
 rag_pipeline = None
 
 # --- Phase 2 Multi-Agent Routes ---
-# _mcp_manager is None at import time; routers read it via a closure so they
-# always see the live value set during the lifespan startup.
+# Both _mcp_manager and rag_pipeline are None at import time; routers receive
+# getter functions so they always read the live values set during lifespan startup.
 def _get_mcp():
     return _mcp_manager
 
-app.include_router(get_query_router(rag_pipeline, verify_api_key, _get_mcp))
-app.include_router(get_contracts_router(rag_pipeline, verify_api_key, _get_mcp))
+def _get_rag():
+    return rag_pipeline
+
+app.include_router(get_query_router(_get_rag, verify_api_key, _get_mcp))
+app.include_router(get_contracts_router(_get_rag, verify_api_key, _get_mcp))
 app.include_router(users_router)
 app.include_router(conv_router)
 app.include_router(webhooks_router)
