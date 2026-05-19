@@ -9,7 +9,7 @@ RUN npm ci --ignore-scripts
 COPY . .
 
 # Build args injected at build time by CI
-ARG VITE_API_URL
+ARG VITE_API_URL=/api
 ARG VITE_CLERK_PUBLISHABLE_KEY
 ARG VITE_LOG_LEVEL=warn
 
