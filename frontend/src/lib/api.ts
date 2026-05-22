@@ -55,6 +55,45 @@ api.interceptors.response.use(
   },
 )
 
+// --- Conversation API ---
+
+export interface ConversationSummary {
+  id: string
+  title: string | null
+  created_at: string
+  message_count: number
+}
+
+export interface ConversationDetail {
+  id: string
+  title: string | null
+  created_at: string
+  messages: Array<{ role: string; content: string }>
+}
+
+export async function getConversations(): Promise<ConversationSummary[]> {
+  const { data } = await api.get('/conversations')
+  return data
+}
+
+export async function createConversation(title: string): Promise<{ id: string; title: string | null }> {
+  const { data } = await api.post('/conversations', { title })
+  return data
+}
+
+export async function getConversation(id: string): Promise<ConversationDetail> {
+  const { data } = await api.get(`/conversations/${id}`)
+  return data
+}
+
+export async function appendMessage(
+  conversationId: string,
+  role: 'user' | 'assistant',
+  content: string,
+): Promise<void> {
+  await api.post(`/conversations/${conversationId}/messages`, { role, content })
+}
+
 export function setAuthToken(token: string | null) {
   if (token) {
     api.defaults.headers.common['Authorization'] = `Bearer ${token}`

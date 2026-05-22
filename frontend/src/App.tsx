@@ -6,6 +6,8 @@ import { useEffect } from 'react'
 import { setAuthToken } from '@/lib/api'
 import { getLogger } from '@/lib/logger'
 import ErrorBoundary from '@/components/ErrorBoundary'
+import { ThemeProvider } from '@/context/ThemeContext'
+import { ChatProvider } from '@/context/ChatContext'
 import Layout from '@/components/Layout'
 import LoginPage from '@/pages/LoginPage'
 import DashboardPage from '@/pages/DashboardPage'
@@ -37,6 +39,7 @@ function ProtectedLayout() {
   return (
     <SignedIn>
       <TokenSync />
+      <ChatProvider>
       <Layout>
         <Routes>
           <Route path="/" element={<DashboardPage />} />
@@ -45,6 +48,7 @@ function ProtectedLayout() {
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </Layout>
+      </ChatProvider>
     </SignedIn>
   )
 }
@@ -53,6 +57,7 @@ export default function App() {
   logger.debug('App rendering', { env: import.meta.env.MODE })
   return (
     <ErrorBoundary>
+      <ThemeProvider>
       <ClerkProvider publishableKey={PUBLISHABLE_KEY}>
         <QueryClientProvider client={queryClient}>
           <BrowserRouter>
@@ -71,6 +76,7 @@ export default function App() {
           </BrowserRouter>
         </QueryClientProvider>
       </ClerkProvider>
+      </ThemeProvider>
     </ErrorBoundary>
   )
 }

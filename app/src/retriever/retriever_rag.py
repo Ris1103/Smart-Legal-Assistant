@@ -180,12 +180,43 @@ class HybridRAGPipeline:
     def rerank(self, query: str, docs: List[Document]) -> List[Document]:
         if not docs:
             return docs
+
+        if settings.reranker_provider == "hf_api":
+            return self._rerank_hf_api(query, docs)
+        return self._rerank_local(query, docs)
+
+    def _rerank_hf_api(self, query: str, docs: List[Document]) -> List[Document]:
+        """Rerank via HuggingFace Inference API — zero local RAM."""
+        import httpx
+        url = f"https://api-inference.huggingface.co/models/{settings.reranker_model}"
+        payload = {
+            "inputs": [
+                {"text": query, "text_pair": doc.page_content}
+                for doc in docs
+            ]
+        }
+        try:
+            resp = httpx.post(
+                url,
+                headers={"Authorization": f"Bearer {settings.hf_api_key}"},
+                json=payload,
+                timeout=60.0,
+            )
+            resp.raise_for_status()
+            scores = [item["score"] for item in resp.json()]
+            reranked = sorted(zip(scores, docs), key=lambda x: x[0], reverse=True)
+            logger.info(f"Reranked {len(docs)} docs via HF API ({settings.reranker_model})")
+            return [doc for _, doc in reranked]
+        except Exception as e:
+            logger.error(f"HF API reranking failed: {e}; returning original order")
+            return docs
+
+    def _rerank_local(self, query: str, docs: List[Document]) -> List[Document]:
+        """Rerank using local FlagReranker / CrossEncoder (requires local model)."""
         if self._reranker is None:
             try:
                 from FlagEmbedding import FlagReranker
-                self._reranker = FlagReranker(
-                    settings.reranker_model, use_fp16=True
-                )
+                self._reranker = FlagReranker(settings.reranker_model, use_fp16=True)
                 logger.info(f"Loaded BGE reranker: {settings.reranker_model}")
             except Exception as e:
                 logger.warning(f"Could not load BGE reranker ({e}), falling back to cross-encoder.")

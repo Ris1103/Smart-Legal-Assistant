@@ -25,7 +25,7 @@ class Settings(BaseSettings):
 
     # --- Models ---
     generative_model_name: str = "gemma-4-26b-a4b-it"
-    embedding_provider: str = "google"   # "google" | "bge"
+    embedding_provider: str = "google"   # "google" | "bge" | "hf_api"
     google_embedding_model_name: str = "models/gemini-embedding-001"
     bge_model_name: str = "BAAI/bge-m3"
     grok_model_name: str = "grok-3"
@@ -35,10 +35,14 @@ class Settings(BaseSettings):
     chunk_size: int = 1000
     chunk_overlap: int = 200
 
+    # --- HuggingFace Inference API ---
+    hf_api_key: str = ""
+
     # --- Retrieval ---
     semantic_weight: float = 0.7
     reranker_enabled: bool = False
     reranker_model: str = "BAAI/bge-reranker-v2-m3"
+    reranker_provider: str = "bge"   # "bge" (local FlagReranker) | "hf_api"
     top_k_retrieval: int = 8
 
     # --- Context Compression ---

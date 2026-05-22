@@ -17,3 +17,4 @@ mlruns/
 CLAUDE.md
 .secrets.baseline
 infra/certs/
+.ignore/

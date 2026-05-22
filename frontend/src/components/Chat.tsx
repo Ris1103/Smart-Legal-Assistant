@@ -1,6 +1,6 @@
 import { useRef, useEffect, useState } from 'react'
 import { Send, Loader2, Trash2, FileDown } from 'lucide-react'
-import { useChat } from '@/hooks/useChat'
+import { useChatContext } from '@/context/ChatContext'
 import type { Message } from '@/hooks/useChat'
 import MessageBubble from './MessageBubble'
 import api from '@/lib/api'
@@ -44,7 +44,7 @@ async function downloadPDF(msg: Message, query: string) {
 }
 
 export default function Chat() {
-  const { messages, loading, error, sendMessage, clearMessages } = useChat()
+  const { messages, loading, error, sendMessage, clearMessages } = useChatContext()
   const [input, setInput] = useState('')
   const bottomRef = useRef<HTMLDivElement>(null)
 
@@ -73,8 +73,8 @@ export default function Chat() {
       {/* Header */}
       <div className="flex items-center justify-between py-4">
         <div>
-          <h1 className="text-lg font-semibold text-gray-900">Legal Assistant</h1>
-          <p className="text-xs text-gray-500">Ask anything about Indian law</p>
+          <h1 className="text-lg font-semibold text-gray-900 dark:text-gray-100">Legal Assistant</h1>
+          <p className="text-xs text-gray-500 dark:text-gray-400">Ask anything about Indian law</p>
         </div>
         {messages.length > 0 && (
           <button
@@ -90,13 +90,13 @@ export default function Chat() {
       <div className="flex-1 overflow-y-auto space-y-4 pb-4">
         {messages.length === 0 && (
           <div className="pt-8">
-            <p className="text-center text-gray-400 text-sm mb-6">Try asking something:</p>
+            <p className="text-center text-gray-400 dark:text-gray-500 text-sm mb-6">Try asking something:</p>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
               {SUGGESTIONS.map((s) => (
                 <button
                   key={s}
                   onClick={() => sendMessage(s)}
-                  className="text-left text-sm bg-white border border-gray-200 rounded-xl px-4 py-3 text-gray-600 hover:border-indigo-300 hover:text-indigo-700 transition-colors shadow-sm"
+                  className="text-left text-sm bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl px-4 py-3 text-gray-600 dark:text-gray-300 hover:border-indigo-300 hover:text-indigo-700 dark:hover:border-indigo-500 dark:hover:text-indigo-300 transition-colors shadow-sm"
                 >
                   {s}
                 </button>
@@ -123,7 +123,7 @@ export default function Chat() {
 
         {loading && (
           <div className="flex justify-start">
-            <div className="bg-white border border-gray-200 rounded-2xl rounded-bl-sm px-4 py-3 shadow-sm">
+            <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-2xl rounded-bl-sm px-4 py-3 shadow-sm">
               <Loader2 className="w-4 h-4 text-indigo-500 animate-spin" />
             </div>
           </div>
@@ -135,13 +135,13 @@ export default function Chat() {
       </div>
 
       {/* Input */}
-      <form onSubmit={handleSubmit} className="py-4 border-t border-gray-100">
-        <div className="flex gap-2 bg-white border border-gray-200 rounded-2xl px-4 py-2 shadow-sm focus-within:border-indigo-400 transition-colors">
+      <form onSubmit={handleSubmit} className="py-4 border-t border-gray-100 dark:border-gray-800">
+        <div className="flex gap-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-2xl px-4 py-2 shadow-sm focus-within:border-indigo-400 transition-colors">
           <input
             value={input}
             onChange={(e) => setInput(e.target.value)}
             placeholder="Ask a legal question..."
-            className="flex-1 text-sm outline-none bg-transparent text-gray-800 placeholder-gray-400"
+            className="flex-1 text-sm outline-none bg-transparent text-gray-800 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500"
             disabled={loading}
           />
           <button

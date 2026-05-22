@@ -90,6 +90,28 @@ jobs:
           source: "docker-compose.yml"
           target: "~/legal-advisor"
 
+      - name: Inject secrets into .env.prod on VM
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.GCP_VM_HOST }}
+          username: ${{ secrets.GCP_VM_USER }}
+          key: ${{ secrets.GCP_SSH_PRIVATE_KEY }}
+          envs: HF_API_KEY
+          script: |
+            set -e
+            ENV_FILE=~/legal-advisor/app/.env.prod
+            # Update or append each managed secret
+            for VAR in HF_API_KEY; do
+              VALUE="${!VAR}"
+              if grep -q "^${VAR}=" "$ENV_FILE" 2>/dev/null; then
+                sed -i "s|^${VAR}=.*|${VAR}=${VALUE}|" "$ENV_FILE"
+              else
+                echo "${VAR}=${VALUE}" >> "$ENV_FILE"
+              fi
+            done
+        env:
+          HF_API_KEY: ${{ secrets.HF_API_KEY }}
+
       - name: Deploy on VM
         uses: appleboy/ssh-action@v1.0.3
         with:
